@@ -1,0 +1,31 @@
+{
+  "name": "qr-survey-rewards",
+  "private": true,
+  "version": "1.0.0",
+  "description": "QR code -> survey -> coupon reward platform (public app + admin portal)",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n API,WEB -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run start:dev --workspace @app/api",
+    "dev:web": "npm run dev --workspace @app/web",
+    "build": "npm run build --workspace @app/api && npm run build --workspace @app/web",
+    "db:push": "npm run db:push --workspace @app/api",
+    "db:seed": "npm run db:seed --workspace @app/api",
+    "setup": "npm install && npm run db:push && npm run db:seed"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.25.12": true,
+    "prisma@6.19.3": true
+  }
+}

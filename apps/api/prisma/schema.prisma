@@ -1,0 +1,164 @@
+// Prisma schema for the QR -> Survey -> Coupon platform.
+// Enum-like columns are plain strings and survey questions are stored as a JSON
+// string so the schema stays portable across database providers.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Admin portal users.
+model AdminUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  name         String?
+  passwordHash String
+  /// ADMIN | VIEWER
+  role         String    @default("ADMIN")
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+/// Native (built-in) survey definitions.
+model Survey {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  /// JSON encoded array of questions - see SurveyQuestion in src/surveys/survey.types.ts
+  questions   String   @default("[]")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// A code-generation request. Every code inherits its survey + coupon configuration.
+model Batch {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  /// NATIVE | CONTENTFUL | THIRD_PARTY
+  surveyType  String
+  /// Native Survey.id or Contentful entry id
+  surveyId    String?
+  /// Third party survey url
+  surveyUrl   String?
+  /// FK-less reference to CouponType.code
+  couponType  String
+  prefix      String?
+  charset     String
+  /// Length of the random body (prefix + checksum char are added on top)
+  codeLength  Int
+  quantity    Int
+  /// DRAFT | ACTIVE | PAUSED | ARCHIVED
+  status      String    @default("ACTIVE")
+  expiresAt   DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  codes Code[]
+
+  @@index([status])
+}
+
+/// Generated codes. The clear-text code is NEVER stored:
+///  - codeHash      : deterministic HMAC used for lookups / uniqueness
+///  - codeEncrypted : AES-256-GCM ciphertext, decrypted only for admin export / verify
+model Code {
+  id               String    @id @default(uuid())
+  batchId          String
+  codeHash         String    @unique
+  codeEncrypted    String
+  codeMasked       String
+  /// UNUSED | RESERVED | USED | DISABLED
+  status           String    @default("UNUSED")
+  sessionToken     String?   @unique
+  sessionExpiresAt DateTime?
+  scanCount        Int       @default(0)
+  lastScanAt       DateTime?
+  usedAt           DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  batch    Batch           @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  coupon   Coupon?
+  response SurveyResponse?
+
+  @@index([batchId, status])
+  @@index([status])
+}
+
+/// Catalogue of coupon types (the "couponType" referenced by a batch).
+model CouponType {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?
+  value       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  coupons Coupon[]
+}
+
+/// Coupon inventory. One coupon is reserved up-front, before the survey is shown.
+model Coupon {
+  id                  String    @id @default(uuid())
+  couponTypeCode      String
+  couponCodeEncrypted String
+  couponCodeHash      String    @unique
+  value               String?
+  /// AVAILABLE | RESERVED | ISSUED | EXPIRED
+  status              String    @default("AVAILABLE")
+  codeId              String?   @unique
+  reservedUntil       DateTime?
+  issuedToEmail       String?
+  issuedAt            DateTime?
+  expiresAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  couponType CouponType @relation(fields: [couponTypeCode], references: [code], onDelete: Cascade)
+  code       Code?      @relation(fields: [codeId], references: [id], onDelete: SetNull)
+
+  @@index([couponTypeCode, status])
+  @@index([status])
+}
+
+/// Stored survey answers (native surveys store the full payload, external ones a receipt).
+model SurveyResponse {
+  id          String   @id @default(uuid())
+  codeId      String   @unique
+  batchId     String
+  surveyType  String
+  surveyRef   String?
+  /// JSON encoded answers
+  answers     String   @default("{}")
+  email       String?
+  completedAt DateTime @default(now())
+
+  code Code @relation(fields: [codeId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+}
+
+/// Lightweight audit trail for admin + redeem activity.
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  actorId   String?
+  entity    String?
+  entityId  String?
+  ip        String?
+  meta      String?
+  createdAt DateTime @default(now())
+
+  @@index([action, createdAt])
+}
