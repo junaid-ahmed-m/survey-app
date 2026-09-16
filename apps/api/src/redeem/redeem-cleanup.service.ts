@@ -5,7 +5,8 @@ import { CouponsService } from '../coupons/coupons.service';
 
 /**
  * Abandoned sessions must not permanently lock inventory:
- * every minute expired reservations are released and the codes become scannable again.
+ * every minute expired coupon holds are returned to stock and dead session
+ * tokens are cleared. The code itself stays USED - the survey was already shown.
  */
 @Injectable()
 export class RedeemCleanupService {
@@ -20,17 +21,17 @@ export class RedeemCleanupService {
   async releaseExpiredSessions(): Promise<void> {
     const now = new Date();
 
-    const releasedCodes = await this.prisma.code.updateMany({
-      where: { status: 'RESERVED', sessionExpiresAt: { lt: now } },
-      data: { status: 'UNUSED', sessionToken: null, sessionExpiresAt: null },
+    const closedSessions = await this.prisma.code.updateMany({
+      where: { sessionExpiresAt: { lt: now } },
+      data: { sessionToken: null, sessionExpiresAt: null },
     });
 
     const releasedCoupons = await this.coupons.releaseExpiredReservations();
     const expiredCoupons = await this.coupons.expireOutdatedCoupons();
 
-    if (releasedCodes.count || releasedCoupons || expiredCoupons) {
+    if (closedSessions.count || releasedCoupons || expiredCoupons) {
       this.logger.log(
-        `Cleanup: ${releasedCodes.count} code session(s) released, ` +
+        `Cleanup: ${closedSessions.count} stale session(s) closed, ` +
           `${releasedCoupons} coupon(s) returned to stock, ${expiredCoupons} coupon(s) expired.`,
       );
     }

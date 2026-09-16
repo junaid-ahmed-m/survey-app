@@ -1,15 +1,24 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api } from '../../lib/api';
+import { api, toApiError } from '../../lib/api';
 import { Batch, Paginated, SurveyResponseRow } from '../../lib/types';
 import { formatDate, SURVEY_TYPE_LABELS } from '../../lib/format';
 import { EmptyState, Modal, PageHeader } from '../../components/admin/ui';
-import { FullPageLoader } from '../../components/Spinner';
+import { FullPageLoader, Spinner } from '../../components/Spinner';
+import { useAuth } from '../../lib/auth';
+import { PERMISSIONS } from '../../lib/permissions';
 
 export default function ResponsesPage() {
+  const { can } = useAuth();
   const [batchId, setBatchId] = useState('');
   const [page, setPage] = useState(1);
+  const [reveal, setReveal] = useState(false);
   const [selected, setSelected] = useState<SurveyResponseRow | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canRevealEmails = can(PERMISSIONS.EMAILS_REVEAL);
+  const canExport = can(PERMISSIONS.RESPONSES_EXPORT);
 
   const { data: batches } = useQuery({
     queryKey: ['admin', 'batches', 'all'],
@@ -18,22 +27,63 @@ export default function ResponsesPage() {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'responses', { batchId, page }],
+    queryKey: ['admin', 'responses', { batchId, page, reveal }],
     queryFn: async () =>
       (
         await api.get<Paginated<SurveyResponseRow>>('/admin/responses', {
-          params: { batchId: batchId || undefined, page, pageSize: 25 },
+          params: {
+            batchId: batchId || undefined,
+            page,
+            pageSize: 25,
+            reveal: reveal ? 'true' : undefined,
+          },
         })
       ).data,
   });
 
   if (isLoading) return <FullPageLoader />;
 
+  const downloadCsv = async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      const response = await api.get('/admin/responses/export.csv', {
+        params: { batchId: batchId || undefined },
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(response.data as Blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'survey-responses.csv';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(toApiError(err).message);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <>
-      <PageHeader title="Responses" subtitle="Completed surveys and the e-mail the reward was sent to." />
+      <PageHeader
+        title="Responses"
+        subtitle="Completed surveys and the e-mail the reward was sent to."
+        actions={
+          canExport ? (
+            <button type="button" className="btn-secondary" onClick={downloadCsv} disabled={exporting}>
+              {exporting ? <Spinner /> : null}
+              Download CSV
+            </button>
+          ) : null
+        }
+      />
 
-      <div className="mb-4">
+      {error ? (
+        <p className="mb-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+      ) : null}
+
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <select
           className="input sm:max-w-sm"
           value={batchId}
@@ -49,6 +99,12 @@ export default function ResponsesPage() {
             </option>
           ))}
         </select>
+        {canRevealEmails ? (
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input type="checkbox" checked={reveal} onChange={(event) => setReveal(event.target.checked)} />
+            Show e-mails
+          </label>
+        ) : null}
       </div>
 
       {!data || data.items.length === 0 ? (
@@ -73,7 +129,7 @@ export default function ResponsesPage() {
                       <td className="px-4 py-3 text-slate-600">{formatDate(row.completedAt)}</td>
                       <td className="px-4 py-3 text-slate-700">{row.batchName ?? '—'}</td>
                       <td className="px-4 py-3 text-slate-600">{SURVEY_TYPE_LABELS[row.surveyType]}</td>
-                      <td className="px-4 py-3 text-slate-600">{row.email ?? '—'}</td>
+                      <td className="px-4 py-3 text-slate-600">{row.email ?? row.maskedEmail ?? '—'}</td>
                       <td className="px-4 py-3 text-right">
                         <button type="button" className="btn-ghost px-2 py-1" onClick={() => setSelected(row)}>
                           View

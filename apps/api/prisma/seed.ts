@@ -11,6 +11,7 @@ import {
   randomBody,
   resolveEncryptionKey,
 } from '../src/common/crypto/crypto.util';
+import { SUPER_ADMIN_ROLE, SYSTEM_ROLES } from '../src/common/constants';
 
 dotenv.config();
 
@@ -25,6 +26,36 @@ function makeCode(prefix: string, charset: string, length: number): string {
   return `${body}${checksumChar(body, checksumSecret)}`;
 }
 
+async function seedRoles() {
+  for (const role of SYSTEM_ROLES) {
+    await prisma.role.upsert({
+      where: { name: role.name },
+      update: {
+        description: role.description,
+        permissions: JSON.stringify(role.permissions),
+        isSystem: true,
+      },
+      create: {
+        name: role.name,
+        description: role.description,
+        permissions: JSON.stringify(role.permissions),
+        isSystem: true,
+      },
+    });
+  }
+
+  // Legacy installs used free-form role strings.
+  const orphans = await prisma.adminUser.findMany({ select: { id: true, role: true } });
+  const known = new Set(SYSTEM_ROLES.map((r) => r.name));
+  for (const user of orphans) {
+    if (!known.has(user.role)) {
+      await prisma.adminUser.update({ where: { id: user.id }, data: { role: SUPER_ADMIN_ROLE } });
+    }
+  }
+
+  console.log(`✔ ${SYSTEM_ROLES.length} system roles ready`);
+}
+
 async function seedAdmin() {
   const email = (process.env.SEED_ADMIN_EMAIL ?? 'admin@example.com').toLowerCase();
   const password = process.env.SEED_ADMIN_PASSWORD ?? 'Admin@12345';
@@ -32,8 +63,8 @@ async function seedAdmin() {
 
   await prisma.adminUser.upsert({
     where: { email },
-    update: { passwordHash, isActive: true },
-    create: { email, name: 'Platform Admin', passwordHash, role: 'ADMIN' },
+    update: { passwordHash, isActive: true, role: SUPER_ADMIN_ROLE },
+    create: { email, name: 'Platform Admin', passwordHash, role: SUPER_ADMIN_ROLE },
   });
 
   console.log(`✔ Admin user ready: ${email} / ${password}`);
@@ -41,8 +72,20 @@ async function seedAdmin() {
 
 async function seedCouponTypes() {
   const types = [
-    { code: 'AMAZON10', name: 'Amazon ₹100 Gift Card', value: '₹100', description: 'Amazon gift voucher' },
-    { code: 'COFFEE', name: 'Free Coffee', value: '1 cup', description: 'Redeemable at any outlet' },
+    {
+      code: 'AMAZON10',
+      name: 'Amazon ₹100 Gift Card',
+      value: '₹100',
+      description: 'Amazon gift voucher',
+      lowStockThreshold: 10,
+    },
+    {
+      code: 'COFFEE',
+      name: 'Free Coffee',
+      value: '1 cup',
+      description: 'Redeemable at any outlet',
+      lowStockThreshold: 10,
+    },
   ];
 
   for (const type of types) {
@@ -165,6 +208,7 @@ async function seedBatch(surveyId: string) {
     data: {
       name: 'Demo Launch Batch',
       description: 'Sample batch created by the seed script.',
+      sku: 'DEMO-SKU-001',
       surveyType: 'NATIVE',
       surveyId,
       couponType: 'AMAZON10',
@@ -196,6 +240,7 @@ async function seedBatch(surveyId: string) {
 }
 
 async function main() {
+  await seedRoles();
   await seedAdmin();
   await seedCouponTypes();
   await seedCoupons();

@@ -32,6 +32,7 @@ export const configuration = () => ({
 
   redeem: {
     sessionTtlMinutes: toInt(process.env.REDEEM_SESSION_TTL_MINUTES, 30),
+    couponReservationSeconds: toInt(process.env.COUPON_RESERVATION_SECONDS, 60),
   },
 
   rateLimit: {

@@ -17,6 +17,7 @@ import { SurveysService } from '../surveys/surveys.service';
 import { ContentfulService } from '../surveys/contentful.service';
 import { MailService } from '../mail/mail.service';
 import { REDEEM_ERRORS } from '../common/constants';
+import { isUniqueViolation } from '../common/prisma-error.util';
 import { ResolvedSurvey } from '../surveys/survey.types';
 import { CompleteRedemptionDto, VerifyCodeDto } from './dto/redeem.dto';
 
@@ -39,6 +40,15 @@ export class RedeemService {
     return (this.config.get<number>('redeem.sessionTtlMinutes') ?? 30) * 60_000;
   }
 
+  /** Coupons are only held for a short window; they go back to stock afterwards. */
+  private get couponReservationMs(): number {
+    return (this.config.get<number>('redeem.couponReservationSeconds') ?? 60) * 1_000;
+  }
+
+  private couponReservedUntil(): Date {
+    return new Date(Date.now() + this.couponReservationMs);
+  }
+
   private invalidCode(): never {
     // Deliberately identical for "unknown" and "bad checksum" so the endpoint
     // cannot be used as an oracle to enumerate valid codes.
@@ -52,9 +62,10 @@ export class RedeemService {
    * Step 1 - the public app calls this right after the QR URL is opened.
    *
    * Guarantees:
-   *  - a code is only "consumed" once,
-   *  - a coupon is reserved BEFORE the survey is shown; if the inventory is empty
-   *    the code stays UNUSED and the user is asked to retry later.
+   *  - a code is either UNUSED or USED; it flips to USED the moment the survey
+   *    is handed out, so a QR can never open a second survey,
+   *  - a coupon is held for a short window before the survey is shown; if the
+   *    inventory is empty the code stays UNUSED and the user is asked to retry.
    */
   async verify(dto: VerifyCodeDto, ip?: string) {
     const normalized = this.generator.normalizeCode(dto.code);
@@ -66,7 +77,7 @@ export class RedeemService {
 
     const record = await this.prisma.code.findUnique({
       where: { codeHash: this.crypto.hash(normalized) },
-      include: { batch: true },
+      include: { batch: true, response: true },
     });
     if (!record) {
       await this.audit('REDEEM_UNKNOWN_CODE', { ip });
@@ -79,13 +90,6 @@ export class RedeemService {
         message: 'This code has been deactivated.',
       });
     }
-    if (record.status === 'USED') {
-      throw new ConflictException({
-        code: REDEEM_ERRORS.ALREADY_USED,
-        message: 'This code has already been used.',
-        details: { usedAt: record.usedAt },
-      });
-    }
 
     this.assertBatchUsable(record.batch);
 
@@ -94,22 +98,34 @@ export class RedeemService {
       data: { scanCount: { increment: 1 }, lastScanAt: new Date() },
     });
 
-    // Resume an in-flight session instead of burning a second coupon.
-    if (
-      record.status === 'RESERVED' &&
-      record.sessionToken &&
-      record.sessionExpiresAt &&
-      record.sessionExpiresAt > new Date()
-    ) {
-      const survey = await this.resolveSurvey(record.batch, record.sessionToken);
-      return this.sessionPayload(record.sessionToken, record.sessionExpiresAt, record.batch, survey);
+    if (record.status === 'USED') {
+      // The survey was already handed out. Re-opening the same QR only resumes the
+      // still-running session; anything else is a spent code.
+      if (
+        !record.response &&
+        record.sessionToken &&
+        record.sessionExpiresAt &&
+        record.sessionExpiresAt > new Date()
+      ) {
+        const survey = await this.resolveSurvey(record.batch, record.sessionToken);
+        return this.sessionPayload(record.sessionToken, record.sessionExpiresAt, record.batch, survey);
+      }
+      throw new ConflictException({
+        code: REDEEM_ERRORS.ALREADY_USED,
+        message: 'This code has already been used.',
+        details: { usedAt: record.usedAt },
+      });
     }
 
     const expiresAt = new Date(Date.now() + this.sessionTtlMs);
     const sessionToken = this.crypto.randomToken(32);
 
-    // Reserve inventory first - no coupon, no survey, code stays unused.
-    const coupon = await this.coupons.reserveForCode(record.batch.couponType, record.id, expiresAt);
+    // Hold inventory first - no coupon, no survey, code stays unused.
+    const coupon = await this.coupons.reserveForCode(
+      record.batch.couponType,
+      record.id,
+      this.couponReservedUntil(),
+    );
     if (!coupon) {
       await this.audit('REDEEM_COUPONS_EXHAUSTED', { ip, entityId: record.id, batchId: record.batchId });
       throw new ServiceUnavailableException({
@@ -127,16 +143,25 @@ export class RedeemService {
       throw error;
     }
 
-    // Conditional claim: if a parallel scan already opened a session we reuse it
-    // instead of handing out two sessions for the same code.
+    // Conditional claim: showing the survey consumes the code. If a parallel scan
+    // won the race we resume its session instead of handing out two surveys.
     const claimed = await this.prisma.code.updateMany({
       where: { id: record.id, status: 'UNUSED' },
-      data: { status: 'RESERVED', sessionToken, sessionExpiresAt: expiresAt },
+      data: { status: 'USED', usedAt: new Date(), sessionToken, sessionExpiresAt: expiresAt },
     });
 
     if (claimed.count === 0) {
-      const current = await this.prisma.code.findUnique({ where: { id: record.id } });
-      if (current?.status === 'RESERVED' && current.sessionToken && current.sessionExpiresAt) {
+      const current = await this.prisma.code.findUnique({
+        where: { id: record.id },
+        include: { response: true },
+      });
+      if (
+        current &&
+        !current.response &&
+        current.sessionToken &&
+        current.sessionExpiresAt &&
+        current.sessionExpiresAt > new Date()
+      ) {
         const runningSurvey = await this.resolveSurvey(record.batch, current.sessionToken);
         return this.sessionPayload(current.sessionToken, current.sessionExpiresAt, record.batch, runningSurvey);
       }
@@ -164,7 +189,7 @@ export class RedeemService {
       });
     }
 
-    if (record.status === 'USED') {
+    if (record.response) {
       const coupon = await this.prisma.coupon.findUnique({ where: { codeId: record.id } });
       return {
         status: 'COMPLETED' as const,
@@ -192,11 +217,11 @@ export class RedeemService {
     return this.sessionPayload(sessionToken, record.sessionExpiresAt, record.batch, survey);
   }
 
-  /** Step 3 - survey finished: consume the code, issue + e-mail the coupon. */
+  /** Step 3 - survey finished: record the answers, issue + e-mail the coupon. */
   async complete(dto: CompleteRedemptionDto, ip?: string) {
     const record = await this.prisma.code.findUnique({
       where: { sessionToken: dto.sessionToken },
-      include: { batch: true },
+      include: { batch: true, response: true },
     });
 
     if (!record) {
@@ -206,14 +231,14 @@ export class RedeemService {
       });
     }
 
-    if (record.status === 'USED') {
+    if (record.response) {
       throw new ConflictException({
         code: REDEEM_ERRORS.ALREADY_USED,
         message: 'This code has already been redeemed.',
       });
     }
 
-    if (record.status !== 'RESERVED' || !record.sessionExpiresAt || record.sessionExpiresAt <= new Date()) {
+    if (!record.sessionExpiresAt || record.sessionExpiresAt <= new Date()) {
       throw new NotFoundException({
         code: REDEEM_ERRORS.SESSION_EXPIRED,
         message: 'This session has expired. Please scan the QR code again.',
@@ -221,9 +246,15 @@ export class RedeemService {
     }
 
     const email = dto.email.trim().toLowerCase();
-    const reserved = await this.prisma.coupon.findUnique({ where: { codeId: record.id } });
-    if (!reserved || reserved.status === 'AVAILABLE') {
-      // The reservation lapsed (e.g. the user left the page open for hours).
+
+    // Re-reserving extends a live hold and pulls a fresh coupon when the window
+    // lapsed, so the cleanup cron cannot pull the rug mid-submit.
+    const reserved = await this.coupons.reserveForCode(
+      record.batch.couponType,
+      record.id,
+      this.couponReservedUntil(),
+    );
+    if (!reserved) {
       throw new ServiceUnavailableException({
         code: REDEEM_ERRORS.COUPONS_EXHAUSTED,
         message: 'We are unable to cater to this request right now. Please try again later.',
@@ -234,29 +265,45 @@ export class RedeemService {
       await this.validateNativeAnswers(record.batch.surveyId, dto.answers ?? {});
     }
 
-    await this.prisma.$transaction([
-      this.prisma.surveyResponse.create({
-        data: {
-          codeId: record.id,
-          batchId: record.batchId,
-          surveyType: record.batch.surveyType,
-          surveyRef: record.batch.surveyId ?? record.batch.surveyUrl ?? null,
-          answers: JSON.stringify(dto.answers ?? {}),
-          email,
-        },
-      }),
-      this.prisma.code.update({
-        where: { id: record.id },
-        data: { status: 'USED', usedAt: new Date(), sessionExpiresAt: null },
-      }),
-    ]);
+    // Answers, the code flip and the coupon hand-out commit together: a failure
+    // here leaves the session replayable instead of burning the reward.
+    let issued: NonNullable<Awaited<ReturnType<CouponsService['issueForCode']>>>;
+    try {
+      issued = await this.prisma.$transaction(async (tx) => {
+        await tx.surveyResponse.create({
+          data: {
+            codeId: record.id,
+            batchId: record.batchId,
+            surveyType: record.batch.surveyType,
+            surveyRef: record.batch.surveyId ?? record.batch.surveyUrl ?? null,
+            answers: JSON.stringify(dto.answers ?? {}),
+            email,
+          },
+        });
+        await tx.code.update({
+          where: { id: record.id },
+          data: { status: 'USED', usedAt: record.usedAt ?? new Date(), sessionExpiresAt: null },
+        });
 
-    const issued = await this.coupons.issueForCode(record.id, email);
-    if (!issued) {
-      throw new ServiceUnavailableException({
-        code: REDEEM_ERRORS.COUPONS_EXHAUSTED,
-        message: 'We are unable to cater to this request right now. Please try again later.',
+        const coupon = await this.coupons.issueForCode(record.id, email, tx);
+        if (!coupon) {
+          throw new ServiceUnavailableException({
+            code: REDEEM_ERRORS.COUPONS_EXHAUSTED,
+            message: 'We are unable to cater to this request right now. Please try again later.',
+          });
+        }
+        return coupon;
       });
+    } catch (error) {
+      // Two submits raced: SurveyResponse.codeId is unique, so the loser is the
+      // duplicate - report it as a spent code rather than a server error.
+      if (isUniqueViolation(error, 'codeId')) {
+        throw new ConflictException({
+          code: REDEEM_ERRORS.ALREADY_USED,
+          message: 'This code has already been redeemed.',
+        });
+      }
+      throw error;
     }
 
     const couponType = await this.prisma.couponType.findUnique({

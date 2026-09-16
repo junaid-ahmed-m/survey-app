@@ -3,20 +3,29 @@ import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QRCodeCanvas } from 'qrcode.react';
 import { api, toApiError } from '../../lib/api';
-import { Batch, BatchCode, Paginated } from '../../lib/types';
+import { Batch, BatchCode, Paginated, RevealedCode } from '../../lib/types';
 import { formatDate, statusClass, SURVEY_TYPE_LABELS } from '../../lib/format';
 import { Modal, PageHeader, StatCard } from '../../components/admin/ui';
 import { FullPageLoader, Spinner } from '../../components/Spinner';
+import { useAuth } from '../../lib/auth';
+import { PERMISSIONS } from '../../lib/permissions';
 
 export default function BatchDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
+  const { can } = useAuth();
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
-  const [qrCode, setQrCode] = useState<BatchCode | null>(null);
+  const [qrCode, setQrCode] = useState<RevealedCode | null>(null);
+  const [revealed, setRevealed] = useState<Record<string, RevealedCode>>({});
+  const [revealing, setRevealing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const qrRef = useRef<HTMLDivElement>(null);
+
+  const canReveal = can(PERMISSIONS.CODES_REVEAL);
+  const canExport = can(PERMISSIONS.CODES_EXPORT);
+  const canManage = can(PERMISSIONS.BATCHES_MANAGE);
 
   const { data: batch, isLoading } = useQuery({
     queryKey: ['admin', 'batch', id],
@@ -70,6 +79,23 @@ export default function BatchDetailPage() {
     link.click();
   };
 
+  /** Clear-text codes are fetched one at a time and every read is audited server-side. */
+  const reveal = async (codeId: string): Promise<RevealedCode | null> => {
+    if (revealed[codeId]) return revealed[codeId];
+    setRevealing(codeId);
+    setError(null);
+    try {
+      const { data } = await api.get<RevealedCode>(`/admin/batches/codes/${codeId}/reveal`);
+      setRevealed((current) => ({ ...current, [codeId]: data }));
+      return data;
+    } catch (err) {
+      setError(toApiError(err).message);
+      return null;
+    } finally {
+      setRevealing(null);
+    }
+  };
+
   if (isLoading || !batch) return <FullPageLoader />;
 
   const totalPages = codes ? Math.max(Math.ceil(codes.total / codes.pageSize), 1) : 1;
@@ -85,11 +111,13 @@ export default function BatchDetailPage() {
         subtitle={batch.description ?? undefined}
         actions={
           <>
-            <button type="button" className="btn-secondary" onClick={downloadCsv} disabled={exporting}>
-              {exporting ? <Spinner /> : null}
-              Export CSV
-            </button>
-            {batch.status === 'ACTIVE' ? (
+            {canExport ? (
+              <button type="button" className="btn-secondary" onClick={downloadCsv} disabled={exporting}>
+                {exporting ? <Spinner /> : null}
+                Export CSV
+              </button>
+            ) : null}
+            {!canManage ? null : batch.status === 'ACTIVE' ? (
               <button
                 type="button"
                 className="btn-secondary"
@@ -117,7 +145,7 @@ export default function BatchDetailPage() {
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard label="Total codes" value={batch.stats.total} />
         <StatCard label="Used" value={batch.stats.used} tone="good" />
-        <StatCard label="In progress" value={batch.stats.reserved} tone="warn" />
+        <StatCard label="Unused" value={batch.stats.unused} />
         <StatCard
           label="Coupons in stock"
           value={batch.couponsAvailable ?? 0}
@@ -129,6 +157,7 @@ export default function BatchDetailPage() {
         <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
             { label: 'Status', value: <span className={`badge ${statusClass(batch.status)}`}>{batch.status}</span> },
+            { label: 'Product SKU', value: <span className="font-mono text-xs">{batch.sku || '—'}</span> },
             { label: 'Survey type', value: SURVEY_TYPE_LABELS[batch.surveyType] },
             {
               label: 'Survey reference',
@@ -159,7 +188,7 @@ export default function BatchDetailPage() {
           }}
         >
           <option value="">All statuses</option>
-          {['UNUSED', 'RESERVED', 'USED', 'DISABLED'].map((value) => (
+          {['UNUSED', 'USED', 'DISABLED'].map((value) => (
             <option key={value} value={value}>
               {value}
             </option>
@@ -182,16 +211,37 @@ export default function BatchDetailPage() {
             <tbody className="divide-y divide-slate-100">
               {codes?.items.map((code) => (
                 <tr key={code.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-slate-800">{code.code}</td>
+                  <td className="px-4 py-3 font-mono text-slate-800">
+                    {revealed[code.id]?.code ?? code.masked}
+                  </td>
                   <td className="px-4 py-3">
                     <span className={`badge ${statusClass(code.status)}`}>{code.status}</span>
                   </td>
                   <td className="px-4 py-3 tabular-nums text-slate-600">{code.scanCount}</td>
                   <td className="px-4 py-3 text-slate-500">{code.usedAt ? formatDate(code.usedAt) : '—'}</td>
                   <td className="px-4 py-3 text-right">
-                    <button type="button" className="btn-ghost px-2 py-1" onClick={() => setQrCode(code)}>
-                      View
-                    </button>
+                    {canReveal ? (
+                      <div className="flex justify-end gap-1">
+                        <button
+                          type="button"
+                          className="btn-ghost px-2 py-1"
+                          disabled={revealing === code.id || Boolean(revealed[code.id])}
+                          onClick={() => void reveal(code.id)}
+                        >
+                          {revealing === code.id ? <Spinner /> : null}
+                          {revealed[code.id] ? 'Revealed' : 'Reveal'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-ghost px-2 py-1"
+                          onClick={() => void reveal(code.id).then((data) => data && setQrCode(data))}
+                        >
+                          QR
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400">Hidden</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -238,9 +288,11 @@ export default function BatchDetailPage() {
               <button type="button" className="btn-secondary" onClick={() => navigator.clipboard.writeText(qrCode.url)}>
                 Copy link
               </button>
-              <button type="button" className="btn-primary" onClick={downloadQrPng}>
-                Download PNG
-              </button>
+              {canExport ? (
+                <button type="button" className="btn-primary" onClick={downloadQrPng}>
+                  Download PNG
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}

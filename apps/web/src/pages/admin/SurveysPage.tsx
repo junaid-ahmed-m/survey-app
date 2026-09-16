@@ -5,6 +5,8 @@ import { SurveyDefinition, SurveyQuestion } from '../../lib/types';
 import { formatDate } from '../../lib/format';
 import { EmptyState, Modal, PageHeader } from '../../components/admin/ui';
 import { FullPageLoader, Spinner } from '../../components/Spinner';
+import { useAuth } from '../../lib/auth';
+import { PERMISSIONS } from '../../lib/permissions';
 
 interface SurveyListItem extends SurveyDefinition {
   questionCount: number;
@@ -34,7 +36,10 @@ const emptyQuestion = (index: number): SurveyQuestion => ({
 
 export default function SurveysPage() {
   const queryClient = useQueryClient();
+  const { can } = useAuth();
   const [editing, setEditing] = useState<SurveyDefinition | 'new' | null>(null);
+
+  const canManage = can(PERMISSIONS.SURVEYS_MANAGE);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'surveys'],
@@ -54,9 +59,11 @@ export default function SurveysPage() {
         title="Native surveys"
         subtitle="Surveys rendered directly inside the app. Contentful and third-party surveys are configured on the batch."
         actions={
-          <button type="button" className="btn-primary" onClick={() => setEditing('new')}>
-            + New survey
-          </button>
+          canManage ? (
+            <button type="button" className="btn-primary" onClick={() => setEditing('new')}>
+              + New survey
+            </button>
+          ) : null
         }
       />
 
@@ -65,9 +72,11 @@ export default function SurveysPage() {
           title="No surveys yet"
           message="Create a native survey to attach it to a batch of codes."
           action={
-            <button type="button" className="btn-primary" onClick={() => setEditing('new')}>
-              Create survey
-            </button>
+            canManage ? (
+              <button type="button" className="btn-primary" onClick={() => setEditing('new')}>
+                Create survey
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -95,7 +104,7 @@ export default function SurveysPage() {
                 className="btn-secondary mt-4"
                 onClick={() => void openEditor(survey.id)}
               >
-                Edit
+                {canManage ? 'Edit' : 'View'}
               </button>
             </div>
           ))}

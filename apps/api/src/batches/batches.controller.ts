@@ -20,61 +20,81 @@ import {
   UpdateBatchStatusDto,
 } from './dto/batch.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
+import { PERMISSIONS } from '../common/constants';
 import { AuthenticatedUser, CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('admin/batches')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class BatchesController {
   constructor(private readonly batches: BatchesService) {}
 
   @Post('preview')
+  @RequirePermissions(PERMISSIONS.BATCHES_MANAGE)
   preview(@Body() dto: PreviewCodeDto) {
     return this.batches.previewStrength(dto);
   }
 
   @Post()
-  @Roles('ADMIN')
+  @RequirePermissions(PERMISSIONS.BATCHES_MANAGE)
   create(@Body() dto: CreateBatchDto, @CurrentUser() user: AuthenticatedUser) {
     return this.batches.create(dto, user.id);
   }
 
   @Get()
+  @RequirePermissions(PERMISSIONS.BATCHES_VIEW)
   list(@Query() query: ListBatchesQueryDto) {
     return this.batches.list(query);
   }
 
   @Get(':id')
+  @RequirePermissions(PERMISSIONS.BATCHES_VIEW)
   findOne(@Param('id') id: string) {
     return this.batches.findOne(id);
   }
 
   @Patch(':id/status')
-  @Roles('ADMIN')
+  @RequirePermissions(PERMISSIONS.BATCHES_MANAGE)
   updateStatus(@Param('id') id: string, @Body() dto: UpdateBatchStatusDto) {
     return this.batches.updateStatus(id, dto);
   }
 
+  /** Codes are always masked here - clear text needs an explicit reveal call. */
   @Get(':id/codes')
+  @RequirePermissions(PERMISSIONS.BATCHES_VIEW)
   listCodes(@Param('id') id: string, @Query() query: ListCodesQueryDto) {
     return this.batches.listCodes(id, query);
   }
 
+  /** Step-up read: one code at a time, audit-logged. */
+  @Get('codes/:codeId/reveal')
+  @RequirePermissions(PERMISSIONS.CODES_REVEAL)
+  reveal(@Param('codeId') codeId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.batches.revealCode(codeId, user.id);
+  }
+
   @Get(':id/export.csv')
+  @RequirePermissions(PERMISSIONS.CODES_EXPORT)
   @Header('Content-Type', 'text/csv; charset=utf-8')
-  async exportCsv(@Param('id') id: string, @Res() res: Response) {
-    const csv = await this.batches.exportCsv(id);
+  async exportCsv(
+    @Param('id') id: string,
+    @Res() res: Response,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const csv = await this.batches.exportCsv(id, user);
     res.setHeader('Content-Disposition', `attachment; filename="batch-${id}-codes.csv"`);
     res.send(csv);
   }
 
   @Get('codes/:codeId/qr')
+  @RequirePermissions(PERMISSIONS.CODES_REVEAL)
   qr(@Param('codeId') codeId: string) {
     return this.batches.qrDataUrl(codeId);
   }
 
   @Get('codes/:codeId/qr.png')
+  @RequirePermissions(PERMISSIONS.CODES_REVEAL, PERMISSIONS.CODES_EXPORT)
   async qrPng(@Param('codeId') codeId: string, @Res() res: Response) {
     const { code, buffer } = await this.batches.qrPngBuffer(codeId);
     res.setHeader('Content-Type', 'image/png');

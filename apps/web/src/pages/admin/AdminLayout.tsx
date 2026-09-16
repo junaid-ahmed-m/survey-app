@@ -1,23 +1,28 @@
-import { useState } from 'react';
+import { ReactNode, useState } from 'react';
 import { NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
 import { FullPageLoader } from '../../components/Spinner';
+import { EmptyState } from '../../components/admin/ui';
+import { PERMISSIONS, Permission } from '../../lib/permissions';
 
-const NAV = [
-  { to: '/admin', label: 'Dashboard', icon: '▤', end: true },
-  { to: '/admin/batches', label: 'Batches & QR', icon: '▦' },
-  { to: '/admin/coupons', label: 'Coupons', icon: '🎟' },
-  { to: '/admin/surveys', label: 'Surveys', icon: '✎' },
-  { to: '/admin/responses', label: 'Responses', icon: '☷' },
+const NAV: { to: string; label: string; icon: string; end?: boolean; permission: Permission }[] = [
+  { to: '/admin', label: 'Dashboard', icon: '▤', end: true, permission: PERMISSIONS.DASHBOARD_VIEW },
+  { to: '/admin/batches', label: 'Batches & QR', icon: '▦', permission: PERMISSIONS.BATCHES_VIEW },
+  { to: '/admin/coupons', label: 'Coupons', icon: '🎟', permission: PERMISSIONS.COUPONS_VIEW },
+  { to: '/admin/surveys', label: 'Surveys', icon: '✎', permission: PERMISSIONS.SURVEYS_VIEW },
+  { to: '/admin/responses', label: 'Responses', icon: '☷', permission: PERMISSIONS.RESPONSES_VIEW },
+  { to: '/admin/access', label: 'Access', icon: '🔒', permission: PERMISSIONS.ROLES_VIEW },
 ];
 
 export default function AdminLayout() {
-  const { user, loading, logout } = useAuth();
+  const { user, loading, logout, can } = useAuth();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
 
   if (loading) return <FullPageLoader label="Loading admin portal…" />;
   if (!user) return <Navigate to="/admin/login" replace state={{ from: location.pathname }} />;
+
+  const nav = NAV.filter((item) => can(item.permission));
 
   return (
     <div className="min-h-dvh bg-slate-50 lg:flex">
@@ -63,7 +68,7 @@ export default function AdminLayout() {
         </div>
 
         <nav className="space-y-1 px-3 py-4 lg:py-0">
-          {NAV.map((item) => (
+          {nav.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -98,5 +103,27 @@ export default function AdminLayout() {
         </div>
       </main>
     </div>
+  );
+}
+
+/** Keeps deep links to a section the role cannot use out of the UI; the API enforces this too. */
+export function RequirePermission({
+  permission,
+  children,
+}: {
+  permission: Permission;
+  children: ReactNode;
+}) {
+  const { can } = useAuth();
+  const nav = NAV.find((item) => can(item.permission));
+
+  if (can(permission)) return <>{children}</>;
+  if (nav) return <Navigate to={nav.to} replace />;
+
+  return (
+    <EmptyState
+      title="No access"
+      message="Your role does not have permission to view this section. Ask an administrator for access."
+    />
   );
 }

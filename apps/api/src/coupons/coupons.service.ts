@@ -9,6 +9,8 @@ import {
   ListCouponsQueryDto,
   UpdateCouponTypeDto,
 } from './dto/coupon.dto';
+import { maskEmail, maskSecret } from '../common/mask.util';
+import { isUniqueViolation } from '../common/prisma-error.util';
 
 @Injectable()
 export class CouponsService {
@@ -57,6 +59,7 @@ export class CouponsService {
         name: dto.name,
         description: dto.description,
         value: dto.value,
+        lowStockThreshold: dto.lowStockThreshold ?? 10,
         isActive: dto.isActive ?? true,
       },
     });
@@ -122,7 +125,8 @@ export class CouponsService {
     };
   }
 
-  async listCoupons(query: ListCouponsQueryDto) {
+  /** `revealEmails` is only true when the caller holds `emails:reveal` and asked for it. */
+  async listCoupons(query: ListCouponsQueryDto, revealEmails = false) {
     const page = Math.max(Number.parseInt(query.page ?? '1', 10) || 1, 1);
     const pageSize = Math.min(Math.max(Number.parseInt(query.pageSize ?? '25', 10) || 25, 1), 200);
 
@@ -148,15 +152,35 @@ export class CouponsService {
       items: items.map((c) => ({
         id: c.id,
         couponTypeCode: c.couponTypeCode,
-        couponCode: this.safeDecrypt(c.couponCodeEncrypted),
+        // Clear text only through revealCoupon().
+        couponCode: null,
+        maskedCouponCode: maskSecret(this.safeDecrypt(c.couponCodeEncrypted)),
         value: c.value,
         status: c.status,
-        issuedToEmail: c.issuedToEmail,
+        issuedToEmail: revealEmails ? c.issuedToEmail : null,
+        maskedIssuedToEmail: maskEmail(c.issuedToEmail),
         issuedAt: c.issuedAt,
         expiresAt: c.expiresAt,
         createdAt: c.createdAt,
       })),
     };
+  }
+
+  /** Decrypts a single coupon code. Callers must hold `coupons:reveal`; audited. */
+  async revealCoupon(id: string, actorId: string) {
+    const coupon = await this.prisma.coupon.findUnique({ where: { id } });
+    if (!coupon) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Coupon not found.' });
+    }
+    const plain = this.safeDecrypt(coupon.couponCodeEncrypted);
+    try {
+      await this.prisma.auditLog.create({
+        data: { action: 'COUPON_REVEALED', actorId, entity: 'Coupon', entityId: id },
+      });
+    } catch (error) {
+      this.logger.warn(`Audit write failed: ${(error as Error).message}`);
+    }
+    return { id: coupon.id, couponCode: plain, maskedCouponCode: maskSecret(plain) };
   }
 
   async inventoryFor(couponTypeCode: string) {
@@ -176,6 +200,8 @@ export class CouponsService {
    * Atomically reserves one coupon for a code.
    * Returns `null` when the inventory is exhausted - the caller must then refuse
    * to start the survey and must NOT mark the code as used.
+   *
+   * Calling it again for a code that already holds a coupon only extends the hold.
    */
   async reserveForCode(couponTypeCode: string, codeId: string, reservedUntil: Date): Promise<Coupon | null> {
     const alreadyReserved = await this.prisma.coupon.findUnique({ where: { codeId } });
@@ -183,55 +209,61 @@ export class CouponsService {
       return this.prisma.coupon.update({ where: { id: alreadyReserved.id }, data: { reservedUntil } });
     }
 
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const candidate = await this.prisma.coupon.findFirst({
-        where: {
-          couponTypeCode: couponTypeCode.toUpperCase(),
-          status: 'AVAILABLE',
-          codeId: null,
-          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-        },
-        orderBy: { createdAt: 'asc' },
-      });
-      if (!candidate) return null;
+    try {
+      // Queue-pop in a single statement. FOR UPDATE SKIP LOCKED makes N concurrent
+      // shoppers take N *different* coupons instead of all contending for the oldest
+      // row, so there is no retry loop and no false "exhausted" under load.
+      const rows = await this.prisma.$queryRaw<Coupon[]>`
+        UPDATE "Coupon" AS c
+           SET "status" = 'RESERVED',
+               "codeId" = ${codeId},
+               "reservedUntil" = ${reservedUntil},
+               "updatedAt" = now()
+         WHERE c."id" = (
+                 SELECT p."id"
+                   FROM "Coupon" AS p
+                  WHERE p."couponTypeCode" = ${couponTypeCode.toUpperCase()}
+                    AND p."status" = 'AVAILABLE'
+                    AND p."codeId" IS NULL
+                    AND (p."expiresAt" IS NULL OR p."expiresAt" > now())
+                  ORDER BY p."createdAt"
+                    FOR UPDATE SKIP LOCKED
+                  LIMIT 1
+               )
+        RETURNING c.*;
+      `;
 
-      // Conditional update = optimistic lock; only one concurrent request wins.
-      let updated: Prisma.BatchPayload;
-      try {
-        updated = await this.prisma.coupon.updateMany({
-          where: { id: candidate.id, status: 'AVAILABLE', codeId: null },
-          data: { status: 'RESERVED', codeId, reservedUntil },
-        });
-      } catch (error) {
-        // Two scans of the same QR raced each other: the code already owns a coupon.
-        if (
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === 'P2002' &&
-          String(error.meta?.target ?? '').includes('codeId')
-        ) {
-          const existing = await this.prisma.coupon.findUnique({ where: { codeId } });
-          if (existing) return existing;
-          continue;
-        }
-        throw error;
+      if (rows.length === 0) {
+        this.logger.warn(`Coupon inventory for ${couponTypeCode.toUpperCase()} is exhausted.`);
+        return null;
       }
-
-      if (updated.count === 1) {
-        return this.prisma.coupon.findUnique({ where: { id: candidate.id } });
+      return rows[0];
+    } catch (error) {
+      // Two scans of the same QR raced each other: Coupon.codeId is unique, so the
+      // loser is rejected and simply re-uses the coupon the winner reserved.
+      if (isUniqueViolation(error, 'codeId')) {
+        const existing = await this.prisma.coupon.findUnique({ where: { codeId } });
+        if (existing) return existing;
       }
+      throw error;
     }
-
-    this.logger.warn(`Could not reserve a ${couponTypeCode} coupon after 5 attempts (high contention).`);
-    return null;
   }
 
-  async issueForCode(codeId: string, email: string) {
-    const coupon = await this.prisma.coupon.findUnique({ where: { codeId } });
-    if (!coupon) return null;
-    const issued = await this.prisma.coupon.update({
-      where: { id: coupon.id },
+  /**
+   * Flips the coupon held by `codeId` to ISSUED. The `status: 'RESERVED'` guard makes
+   * this a compare-and-swap, so a hold released by the cleanup cron can never be
+   * issued behind our back. Pass `client` to run inside the caller's transaction.
+   */
+  async issueForCode(codeId: string, email: string, client: Prisma.TransactionClient = this.prisma) {
+    const claimed = await client.coupon.updateMany({
+      where: { codeId, status: 'RESERVED' },
       data: { status: 'ISSUED', issuedToEmail: email, issuedAt: new Date(), reservedUntil: null },
     });
+    if (claimed.count !== 1) return null;
+
+    const issued = await client.coupon.findFirst({ where: { codeId, status: 'ISSUED' } });
+    if (!issued) return null;
+
     return {
       code: this.safeDecrypt(issued.couponCodeEncrypted),
       value: issued.value,
@@ -249,14 +281,10 @@ export class CouponsService {
 
   /** Puts coupons whose reservation window elapsed back into the pool. */
   async releaseExpiredReservations(): Promise<number> {
-    const expired = await this.prisma.coupon.findMany({
-      where: { status: 'RESERVED', reservedUntil: { lt: new Date() } },
-      select: { id: true },
-    });
-    if (expired.length === 0) return 0;
-
+    // Single conditional update: a hold that was extended between the read and the
+    // write is no longer stale, so the WHERE clause simply skips it.
     const result = await this.prisma.coupon.updateMany({
-      where: { id: { in: expired.map((c) => c.id) } },
+      where: { status: 'RESERVED', reservedUntil: { lt: new Date() } },
       data: { status: 'AVAILABLE', codeId: null, reservedUntil: null },
     });
     return result.count;

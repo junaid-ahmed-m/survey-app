@@ -69,6 +69,7 @@ export class BatchesService {
       data: {
         name: dto.name,
         description: dto.description,
+        sku: dto.sku?.trim().toUpperCase() || null,
         surveyType: dto.surveyType,
         surveyId: dto.surveyId,
         surveyUrl: dto.surveyUrl,
@@ -167,7 +168,14 @@ export class BatchesService {
 
     const where = {
       ...(query.status ? { status: query.status } : {}),
-      ...(query.search ? { name: { contains: query.search, mode: 'insensitive' as const } } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { name: { contains: query.search, mode: 'insensitive' as const } },
+              { sku: { contains: query.search, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
     };
 
     const [total, batches] = await Promise.all([
@@ -202,7 +210,6 @@ export class BatchesService {
       stats: {
         total: mine.reduce((sum, s) => sum + s._count._all, 0),
         unused: get('UNUSED'),
-        reserved: get('RESERVED'),
         used: get('USED'),
         disabled: get('DISABLED'),
       },
@@ -260,38 +267,56 @@ export class BatchesService {
       total,
       page,
       pageSize,
-      items: codes.map((code) => {
-        const plain = this.safeDecrypt(code.codeEncrypted);
-        return {
-          id: code.id,
-          code: plain,
-          masked: code.codeMasked,
-          status: code.status,
-          scanCount: code.scanCount,
-          usedAt: code.usedAt,
-          createdAt: code.createdAt,
-          url: this.redeemUrl(plain),
-        };
-      }),
+      items: codes.map((code) => ({
+        id: code.id,
+        // Clear text is never part of a listing - see revealCode().
+        code: null,
+        masked: code.codeMasked,
+        status: code.status,
+        scanCount: code.scanCount,
+        usedAt: code.usedAt,
+        createdAt: code.createdAt,
+        url: null,
+      })),
     };
   }
 
-  async exportCsv(batchId: string): Promise<string> {
+  /** Decrypts a single code. Callers must hold `codes:reveal`; every read is audited. */
+  async revealCode(codeId: string, actorId: string) {
+    const code = await this.prisma.code.findUnique({ where: { id: codeId } });
+    if (!code) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Code not found.' });
+    }
+    const plain = this.safeDecrypt(code.codeEncrypted);
+    await this.audit('CODE_REVEALED', actorId, codeId);
+    return { id: code.id, code: plain, masked: code.codeMasked, url: this.redeemUrl(plain) };
+  }
+
+  async exportCsv(batchId: string, actor: { id: string }): Promise<string> {
     const batch = await this.findOne(batchId);
     const codes = await this.prisma.code.findMany({
       where: { batchId },
       orderBy: { createdAt: 'asc' },
     });
 
-    const header = ['batch', 'code', 'url', 'status', 'used_at'];
+    const header = ['batch', 'sku', 'code', 'url', 'status', 'used_at'];
     const escape = (value: string) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
     const lines = codes.map((code) => {
       const plain = this.safeDecrypt(code.codeEncrypted);
-      return [batch.name, plain, this.redeemUrl(plain), code.status, code.usedAt?.toISOString() ?? '']
+      return [
+        batch.name,
+        batch.sku ?? '',
+        plain,
+        this.redeemUrl(plain),
+        code.status,
+        code.usedAt?.toISOString() ?? '',
+      ]
         .map(escape)
         .join(',');
     });
+
+    await this.audit('CODES_EXPORTED', actor.id, batchId, { count: codes.length });
 
     return [header.join(','), ...lines].join('\r\n');
   }
@@ -319,6 +344,27 @@ export class BatchesService {
       width: 512,
     });
     return { code: plain, buffer };
+  }
+
+  private async audit(
+    action: string,
+    actorId: string,
+    entityId: string,
+    meta?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          action,
+          actorId,
+          entity: 'Code',
+          entityId,
+          meta: meta ? JSON.stringify(meta) : null,
+        },
+      });
+    } catch (error) {
+      this.logger.warn(`Audit write failed: ${(error as Error).message}`);
+    }
   }
 
   private safeDecrypt(payload: string): string {

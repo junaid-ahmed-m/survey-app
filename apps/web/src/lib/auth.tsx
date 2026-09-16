@@ -1,16 +1,20 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { api, TOKEN_STORAGE_KEY, toApiError } from './api';
+import { Permission } from './permissions';
 
 export interface AdminUser {
   id: string;
   email: string;
   name: string | null;
-  role: 'ADMIN' | 'VIEWER';
+  role: string;
+  permissions: Permission[];
 }
 
 interface AuthContextValue {
   user: AdminUser | null;
   loading: boolean;
+  /** True when the signed-in user holds every listed permission. */
+  can: (...permissions: Permission[]) => boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
 }
@@ -52,7 +56,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
-  const value = useMemo(() => ({ user, loading, login, logout }), [user, loading, login, logout]);
+  const can = useCallback(
+    (...permissions: Permission[]) =>
+      permissions.every((permission) => user?.permissions?.includes(permission) ?? false),
+    [user],
+  );
+
+  const value = useMemo(
+    () => ({ user, loading, can, login, logout }),
+    [user, loading, can, login, logout],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

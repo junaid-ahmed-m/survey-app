@@ -5,6 +5,7 @@ import * as bcrypt from 'bcryptjs';
 import type { SignOptions } from 'jsonwebtoken';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
+import { resolvePermissions } from '../common/resolve-permissions';
 
 @Injectable()
 export class AuthService {
@@ -46,7 +47,13 @@ export class AuthService {
 
     return {
       accessToken,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        permissions: await resolvePermissions(this.prisma, user.role),
+      },
     };
   }
 }

@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
+import { resolvePermissions } from '../common/resolve-permissions';
 
 export interface JwtPayload {
   sub: string;
@@ -29,6 +30,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     if (!user || !user.isActive) {
       throw new UnauthorizedException({ code: 'UNAUTHORIZED', message: 'Session is no longer valid.' });
     }
-    return { id: user.id, email: user.email, name: user.name, role: user.role };
+    // Resolved per request so a role change takes effect without a new token.
+    const permissions = await resolvePermissions(this.prisma, user.role);
+    return { id: user.id, email: user.email, name: user.name, role: user.role, permissions };
   }
 }

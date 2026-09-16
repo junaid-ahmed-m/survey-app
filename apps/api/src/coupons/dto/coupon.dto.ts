@@ -36,6 +36,13 @@ export class CreateCouponTypeDto {
   @MaxLength(60)
   value?: string;
 
+  /** Dashboard alerts when AVAILABLE stock drops to or below this number. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  lowStockThreshold?: number;
+
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
@@ -56,6 +63,12 @@ export class UpdateCouponTypeDto {
   @IsString()
   @MaxLength(60)
   value?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  lowStockThreshold?: number;
 
   @IsOptional()
   @IsBoolean()
@@ -117,4 +130,9 @@ export class ListCouponsQueryDto {
   @IsOptional()
   @IsString()
   pageSize?: string;
+
+  /** 'true' asks for clear-text e-mails; ignored unless the caller holds `emails:reveal`. */
+  @IsOptional()
+  @IsString()
+  reveal?: string;
 }

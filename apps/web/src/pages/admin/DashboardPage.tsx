@@ -23,7 +23,9 @@ export default function DashboardPage() {
 
   if (isLoading || !data) return <FullPageLoader />;
 
-  const lowStock = data.coupons.available < 10;
+  const alerts = data.couponAlerts ?? [];
+  const empty = alerts.filter((alert) => alert.severity === 'EMPTY');
+  const lowStock = alerts.length > 0;
 
   return (
     <>
@@ -37,14 +39,38 @@ export default function DashboardPage() {
         }
       />
 
-      {lowStock ? (
-        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <strong className="font-semibold">Low coupon inventory.</strong> When stock runs out, codes are not
-          consumed and users are told to try again later. Top up under{' '}
-          <Link to="/admin/coupons" className="underline">
-            Coupons
+      {alerts.length > 0 ? (
+        <div
+          className={`mb-6 rounded-2xl border px-4 py-3 text-sm ${
+            empty.length > 0
+              ? 'border-rose-200 bg-rose-50 text-rose-800'
+              : 'border-amber-200 bg-amber-50 text-amber-800'
+          }`}
+        >
+          <strong className="font-semibold">
+            {empty.length > 0
+              ? `${empty.length} coupon type${empty.length === 1 ? ' is' : 's are'} out of stock.`
+              : `${alerts.length} coupon type${alerts.length === 1 ? '' : 's'} running low.`}
+          </strong>{' '}
+          While a pool is empty, codes are not consumed and shoppers are asked to try again later.
+          <ul className="mt-2 space-y-1">
+            {alerts.map((alert) => (
+              <li key={alert.couponTypeCode} className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-mono text-xs font-semibold">{alert.couponTypeCode}</span>
+                <span className="text-xs">
+                  {alert.name} — {formatNumber(alert.available)} left of {formatNumber(alert.threshold)}{' '}
+                  threshold
+                  {alert.reserved > 0 ? `, ${formatNumber(alert.reserved)} on hold` : ''}
+                  {alert.activeBatches > 0
+                    ? `, ${alert.activeBatches} active batch${alert.activeBatches === 1 ? '' : 'es'}`
+                    : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <Link to="/admin/coupons" className="mt-2 inline-block font-medium underline">
+            Top up inventory
           </Link>
-          .
         </div>
       ) : null}
 
@@ -56,7 +82,7 @@ export default function DashboardPage() {
           hint={`${data.codes.redemptionRate}% redemption rate`}
           tone="good"
         />
-        <StatCard label="In progress" value={formatNumber(data.codes.reserved)} tone="warn" />
+        <StatCard label="Unused" value={formatNumber(data.codes.unused)} />
         <StatCard
           label="Coupons left"
           value={formatNumber(data.coupons.available)}
@@ -87,7 +113,6 @@ export default function DashboardPage() {
           <div className="mt-3 flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
             {[
               { value: data.codes.used, className: 'bg-brand-600' },
-              { value: data.codes.reserved, className: 'bg-amber-400' },
               { value: data.codes.unused, className: 'bg-slate-300' },
             ].map((segment, index) => (
               <div
@@ -101,10 +126,6 @@ export default function DashboardPage() {
             <span>
               <span className="mr-1 inline-block h-2 w-2 rounded-full bg-brand-600" />
               Used {formatNumber(data.codes.used)}
-            </span>
-            <span>
-              <span className="mr-1 inline-block h-2 w-2 rounded-full bg-amber-400" />
-              In progress {formatNumber(data.codes.reserved)}
             </span>
             <span>
               <span className="mr-1 inline-block h-2 w-2 rounded-full bg-slate-300" />

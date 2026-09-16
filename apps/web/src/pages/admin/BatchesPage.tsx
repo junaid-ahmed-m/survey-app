@@ -7,12 +7,17 @@ import { formatDate, statusClass, SURVEY_TYPE_LABELS } from '../../lib/format';
 import { EmptyState, PageHeader } from '../../components/admin/ui';
 import { CreateBatchModal } from '../../components/admin/CreateBatchModal';
 import { FullPageLoader } from '../../components/Spinner';
+import { useAuth } from '../../lib/auth';
+import { PERMISSIONS } from '../../lib/permissions';
 
 export default function BatchesPage() {
+  const { can } = useAuth();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
+
+  const canManage = can(PERMISSIONS.BATCHES_MANAGE);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'batches', { search, status, page }],
@@ -30,16 +35,18 @@ export default function BatchesPage() {
         title="Batches & QR codes"
         subtitle="Every batch defines the survey and the reward for the codes it contains."
         actions={
-          <button type="button" className="btn-primary" onClick={() => setModalOpen(true)}>
-            + New batch
-          </button>
+          canManage ? (
+            <button type="button" className="btn-primary" onClick={() => setModalOpen(true)}>
+              + New batch
+            </button>
+          ) : null
         }
       />
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row">
         <input
           className="input sm:max-w-xs"
-          placeholder="Search by name…"
+          placeholder="Search by name or SKU…"
           value={search}
           onChange={(event) => {
             setSearch(event.target.value);
@@ -70,9 +77,11 @@ export default function BatchesPage() {
           title="No batches yet"
           message="Create a batch to generate codes and QR codes for your campaign."
           action={
-            <button type="button" className="btn-primary" onClick={() => setModalOpen(true)}>
-              Create the first batch
-            </button>
+            canManage ? (
+              <button type="button" className="btn-primary" onClick={() => setModalOpen(true)}>
+                Create the first batch
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -86,6 +95,7 @@ export default function BatchesPage() {
                     <p className="truncate text-sm font-semibold text-slate-900">{batch.name}</p>
                     <p className="mt-0.5 text-xs text-slate-500">
                       {SURVEY_TYPE_LABELS[batch.surveyType]} · {batch.couponType}
+                      {batch.sku ? ` · ${batch.sku}` : ''}
                     </p>
                   </div>
                   <span className={`badge ${statusClass(batch.status)}`}>{batch.status}</span>
@@ -105,6 +115,7 @@ export default function BatchesPage() {
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-3 font-medium">Batch</th>
+                  <th className="px-4 py-3 font-medium">SKU</th>
                   <th className="px-4 py-3 font-medium">Survey</th>
                   <th className="px-4 py-3 font-medium">Coupon</th>
                   <th className="px-4 py-3 font-medium">Codes</th>
@@ -123,6 +134,7 @@ export default function BatchesPage() {
                         <span className="ml-2 font-mono text-xs text-slate-400">{batch.prefix}…</span>
                       ) : null}
                     </td>
+                    <td className="px-4 py-3 font-mono text-xs text-slate-600">{batch.sku ?? '—'}</td>
                     <td className="px-4 py-3 text-slate-600">{SURVEY_TYPE_LABELS[batch.surveyType]}</td>
                     <td className="px-4 py-3 text-slate-600">{batch.couponType}</td>
                     <td className="px-4 py-3 tabular-nums text-slate-600">

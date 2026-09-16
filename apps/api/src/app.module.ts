@@ -13,6 +13,8 @@ import { CouponsModule } from './coupons/coupons.module';
 import { BatchesModule } from './batches/batches.module';
 import { RedeemModule } from './redeem/redeem.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { RolesModule } from './roles/roles.module';
+import { UsersModule } from './users/users.module';
 import { HealthController } from './health/health.controller';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
@@ -47,6 +49,8 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
     BatchesModule,
     RedeemModule,
     DashboardModule,
+    RolesModule,
+    UsersModule,
   ],
   controllers: [HealthController],
   providers: [

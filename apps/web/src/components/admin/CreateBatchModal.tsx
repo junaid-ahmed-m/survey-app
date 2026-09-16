@@ -16,6 +16,7 @@ interface Props {
 interface FormState {
   name: string;
   description: string;
+  sku: string;
   surveyType: 'NATIVE' | 'CONTENTFUL' | 'THIRD_PARTY';
   surveyId: string;
   surveyUrl: string;
@@ -30,6 +31,7 @@ interface FormState {
 const INITIAL: FormState = {
   name: '',
   description: '',
+  sku: '',
   surveyType: 'NATIVE',
   surveyId: '',
   surveyUrl: '',
@@ -102,6 +104,7 @@ export function CreateBatchModal({ open, onClose }: Props) {
         charset: form.charset || undefined,
       };
       if (form.description.trim()) payload.description = form.description.trim();
+      if (form.sku.trim()) payload.sku = form.sku.trim().toUpperCase();
       if (form.prefix.trim()) payload.prefix = form.prefix.trim().toUpperCase();
       if (form.expiresAt) payload.expiresAt = new Date(form.expiresAt).toISOString();
       if (form.surveyType === 'THIRD_PARTY') payload.surveyUrl = form.surveyUrl.trim();
@@ -156,6 +159,24 @@ export function CreateBatchModal({ open, onClose }: Props) {
               value={form.description}
               onChange={(event) => set('description', event.target.value)}
             />
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="label" htmlFor="batch-sku">
+              Product SKU <span className="text-slate-400">(optional)</span>
+            </label>
+            <input
+              id="batch-sku"
+              className="input uppercase"
+              maxLength={64}
+              pattern="[A-Za-z0-9._/-]*"
+              placeholder="PMP-PANTS-L-42"
+              value={form.sku}
+              onChange={(event) => set('sku', event.target.value)}
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              The product these codes are printed on. Shown on exports and used to search batches.
+            </p>
           </div>
         </div>
 

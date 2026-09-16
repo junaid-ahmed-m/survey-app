@@ -17,12 +17,26 @@ model AdminUser {
   email        String    @unique
   name         String?
   passwordHash String
-  /// ADMIN | VIEWER
-  role         String    @default("ADMIN")
+  /// FK-less reference to Role.name
+  role         String    @default("VIEWER")
   isActive     Boolean   @default(true)
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+
+  @@index([role])
+}
+
+/// A named bundle of permission strings - see PERMISSIONS in src/common/constants.ts.
+model Role {
+  name        String   @id
+  description String?
+  /// JSON encoded array of permission keys
+  permissions String   @default("[]")
+  /// System roles ship with the platform and cannot be deleted
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 /// Native (built-in) survey definitions.
@@ -42,6 +56,8 @@ model Batch {
   id          String    @id @default(uuid())
   name        String
   description String?
+  /// Product identifier this batch of codes is printed on.
+  sku         String?
   /// NATIVE | CONTENTFUL | THIRD_PARTY
   surveyType  String
   /// Native Survey.id or Contentful entry id
@@ -65,6 +81,7 @@ model Batch {
   codes Code[]
 
   @@index([status])
+  @@index([sku])
 }
 
 /// Generated codes. The clear-text code is NEVER stored:
@@ -76,7 +93,7 @@ model Code {
   codeHash         String    @unique
   codeEncrypted    String
   codeMasked       String
-  /// UNUSED | RESERVED | USED | DISABLED
+  /// UNUSED | USED | DISABLED - a code flips to USED as soon as the survey is shown
   status           String    @default("UNUSED")
   sessionToken     String?   @unique
   sessionExpiresAt DateTime?
@@ -101,6 +118,8 @@ model CouponType {
   name        String
   description String?
   value       String?
+  /// Dashboard raises a low-stock alert at or below this many AVAILABLE coupons.
+  lowStockThreshold Int  @default(10)
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

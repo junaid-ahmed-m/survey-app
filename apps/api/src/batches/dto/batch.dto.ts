@@ -24,6 +24,15 @@ export class CreateBatchDto {
   @MaxLength(500)
   description?: string;
 
+  /** Product identifier printed on the pack this batch belongs to. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  @Matches(/^[A-Za-z0-9._\/-]*$/, {
+    message: 'SKU may only contain letters, numbers and . _ / -',
+  })
+  sku?: string;
+
   @IsIn(SURVEY_TYPES as unknown as string[])
   surveyType!: string;
 

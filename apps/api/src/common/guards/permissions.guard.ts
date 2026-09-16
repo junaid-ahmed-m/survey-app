@@ -1,24 +1,29 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ROLES_KEY } from '../decorators/roles.decorator';
+import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { AuthenticatedUser } from '../decorators/current-user.decorator';
+import { Permission } from '../constants';
 
 @Injectable()
-export class RolesGuard implements CanActivate {
+export class PermissionsGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const required = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
+    const required = this.reflector.getAllAndOverride<Permission[]>(PERMISSIONS_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
     if (!required || required.length === 0) return true;
 
     const user = context.switchToHttp().getRequest<{ user?: AuthenticatedUser }>().user;
-    if (!user || !required.includes(user.role)) {
+    const granted = new Set(user?.permissions ?? []);
+    const missing = required.filter((permission) => !granted.has(permission));
+
+    if (missing.length > 0) {
       throw new ForbiddenException({
         code: 'FORBIDDEN',
-        message: 'You do not have permission to perform this action.',
+        message: 'Your role does not allow this action.',
+        details: { missing },
       });
     }
     return true;

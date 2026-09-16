@@ -80,8 +80,14 @@ async function main() {
   check('demo batch exists', Boolean(demo));
 
   const codes = await call('GET', `/admin/batches/${demo.id}/codes?status=UNUSED&pageSize=5`, { token });
-  const target = codes.data.items[0];
-  check('unused codes are available', Boolean(target), JSON.stringify(codes.data).slice(0, 200));
+  const listed = codes.data.items[0];
+  check('unused codes are available', Boolean(listed), JSON.stringify(codes.data).slice(0, 200));
+  check('code listings are masked', listed.code === null && Boolean(listed.masked));
+
+  // Clear text only comes from the audited reveal endpoint.
+  const revealed = await call('GET', `/admin/batches/codes/${listed.id}/reveal`, { token });
+  check('super admin can reveal a code', revealed.status === 200 && Boolean(revealed.data.code));
+  const target = revealed.data;
   console.log(`      using code ${target.code}`);
 
   console.log('\n3. Public redeem flow');
@@ -154,8 +160,9 @@ async function main() {
 
   const emptyCodes = await call('GET', `/admin/batches/${emptyBatch.data.id}/codes`, { token });
   const emptyCode = emptyCodes.data.items[0];
+  const emptyRevealed = await call('GET', `/admin/batches/codes/${emptyCode.id}/reveal`, { token });
 
-  const exhausted = await redeem('POST', '/public/redeem/verify', { code: emptyCode.code });
+  const exhausted = await redeem('POST', '/public/redeem/verify', { code: emptyRevealed.data.code });
   check(
     'no coupons left -> user is asked to retry later',
     exhausted.status === 503 && exhausted.data.code === 'COUPONS_EXHAUSTED',
@@ -166,7 +173,183 @@ async function main() {
   const stillUnused = afterExhaustion.data.items.find((c) => c.id === emptyCode.id);
   check('the code was NOT consumed', stillUnused.status === 'UNUSED', stillUnused.status);
 
-  console.log('\n5. Rate limiting on the open endpoint');
+  console.log('\n5. Concurrency / race conditions');
+  // Keep the pool healthy so a race is decided by the locking, not by inventory.
+  await call('POST', '/admin/coupons/import', {
+    token,
+    body: { couponTypeCode: demo.couponType, generateCount: 5, generatePrefix: 'RACE' },
+  });
+
+  const issuedBefore = (await call('GET', '/admin/coupons?status=ISSUED&pageSize=1', { token })).data.total;
+
+  const raceCodes = await call('GET', `/admin/batches/${demo.id}/codes?status=UNUSED&pageSize=5`, { token });
+  const raceCode = raceCodes.data.items[0];
+  const raceRevealed = await call('GET', `/admin/batches/codes/${raceCode.id}/reveal`, { token });
+  check('a fresh code is available for the race', Boolean(raceRevealed.data?.code));
+
+  // Three simultaneous scans of the same QR (double-tap / StrictMode / two tabs).
+  // Wait out the 10/60s redeem window first so the race is not masked by 429s;
+  // 3 parallel calls is exactly the 3/5s burst allowance.
+  console.log('      waiting for the rate-limit window to clear...');
+  await sleep(61_000);
+  const scans = await Promise.all(
+    [0, 1, 2].map(() => call('POST', '/public/redeem/verify', { code: raceRevealed.data.code })),
+  );
+  const okScans = scans.filter((r) => r.status === 200);
+  const scanTokens = new Set(okScans.map((r) => r.data.sessionToken));
+  check(
+    'parallel scans of one QR never error',
+    scans.every((r) => r.status === 200 || r.status === 429),
+    scans.map((r) => r.status).join(','),
+  );
+  check(
+    'parallel scans share a single session (one coupon held)',
+    okScans.length > 0 && scanTokens.size === 1,
+    `${okScans.length} ok / ${scanTokens.size} token(s)`,
+  );
+
+  const raceSession = okScans[0]?.data ?? {};
+  const raceAnswers = Object.fromEntries(
+    (raceSession?.survey?.survey?.questions ?? []).map((q) => [
+      q.id,
+      q.type === 'multi_choice'
+        ? [q.options?.[0]?.value ?? 'x']
+        : q.type === 'single_choice'
+          ? (q.options?.[0]?.value ?? 'x')
+          : q.type === 'nps'
+            ? 9
+            : q.type === 'rating'
+              ? 5
+              : 'Great product',
+    ]),
+  );
+
+  // Three simultaneous submits of the same session (double-tap on "Get my reward").
+  await sleep(6_000);
+  const submits = await Promise.all(
+    [0, 1, 2].map(() =>
+      call('POST', '/public/redeem/complete', {
+        body: { sessionToken: raceSession.sessionToken, email: 'race@example.com', answers: raceAnswers },
+      }),
+    ),
+  );
+  const winners = submits.filter((r) => r.status === 200);
+  check(
+    'exactly one parallel submit wins',
+    winners.length === 1 && Boolean(winners[0].data.coupon?.code),
+    submits.map((r) => r.status).join(','),
+  );
+  check(
+    'losing submits get a clean 409, never a 500',
+    submits.every((r) => r.status === 200 || r.status === 409 || r.status === 429) &&
+      submits.filter((r) => r.status === 409).every((r) => r.data.code === 'CODE_ALREADY_USED'),
+    JSON.stringify(submits.map((r) => [r.status, r.data?.code])),
+  );
+
+  const issuedAfter = (await call('GET', '/admin/coupons?status=ISSUED&pageSize=1', { token })).data.total;
+  check(
+    'only one coupon was issued for the contended code',
+    issuedAfter === issuedBefore + 1,
+    `${issuedBefore} -> ${issuedAfter}`,
+  );
+
+  console.log('\n6. Role based access control');
+  const viewerEmail = `viewer.${Date.now()}@example.com`;
+  const viewerPassword = 'Viewer@12345';
+  const createdViewer = await call('POST', '/admin/users', {
+    token,
+    body: { email: viewerEmail, name: 'Smoke Viewer', password: viewerPassword, role: 'VIEWER' },
+  });
+  check('a VIEWER user can be created', createdViewer.status === 201, JSON.stringify(createdViewer.data).slice(0, 200));
+
+  const viewerLogin = await call('POST', '/admin/auth/login', {
+    body: { email: viewerEmail, password: viewerPassword },
+  });
+  const viewerToken = viewerLogin.data.accessToken;
+  check(
+    'VIEWER has no reveal/export permissions',
+    viewerLogin.status === 200 &&
+      !viewerLogin.data.user.permissions.includes('codes:reveal') &&
+      !viewerLogin.data.user.permissions.includes('emails:reveal'),
+    JSON.stringify(viewerLogin.data.user?.permissions),
+  );
+
+  const viewerReveal = await call('GET', `/admin/batches/codes/${listed.id}/reveal`, { token: viewerToken });
+  check('VIEWER cannot reveal a code', viewerReveal.status === 403, JSON.stringify(viewerReveal.data));
+
+  const viewerExport = await call('GET', `/admin/batches/${demo.id}/export.csv`, { token: viewerToken });
+  check('VIEWER cannot export the CSV', viewerExport.status === 403, String(viewerExport.status));
+
+  const viewerResponses = await call('GET', '/admin/responses?reveal=true', { token: viewerToken });
+  const firstResponse = viewerResponses.data.items?.[0];
+  check(
+    'VIEWER only sees masked e-mails even when asking to reveal',
+    viewerResponses.status === 200 && Boolean(firstResponse) && firstResponse.email === null && Boolean(firstResponse.maskedEmail),
+    JSON.stringify(firstResponse).slice(0, 200),
+  );
+
+  const viewerRoles = await call('GET', '/admin/roles', { token: viewerToken });
+  check('VIEWER cannot manage access', viewerRoles.status === 403, String(viewerRoles.status));
+
+  const viewerResponsesCsv = await call('GET', '/admin/responses/export.csv', { token: viewerToken });
+  check('VIEWER cannot download responses', viewerResponsesCsv.status === 403, String(viewerResponsesCsv.status));
+
+  const issuedCoupons = await call('GET', '/admin/coupons?status=ISSUED&pageSize=5', { token });
+  const issued = issuedCoupons.data.items?.[0];
+  check(
+    'coupon listings mask the code and the issued-to e-mail by default',
+    Boolean(issued) &&
+      issued.couponCode === null &&
+      Boolean(issued.maskedCouponCode) &&
+      issued.issuedToEmail === null &&
+      Boolean(issued.maskedIssuedToEmail),
+    JSON.stringify(issued).slice(0, 200),
+  );
+
+  const responsesCsv = await call('GET', '/admin/responses/export.csv', { token });
+  check(
+    'super admin can download responses as CSV',
+    responsesCsv.status === 200 &&
+      String(responsesCsv.data).startsWith('"completed_at","batch","survey_type","email"'),
+    String(responsesCsv.data).slice(0, 120),
+  );
+
+  await call('PATCH', `/admin/users/${createdViewer.data.id}`, { token, body: { isActive: false } });
+
+  const catalog = await call('GET', '/admin/roles/permissions', { token });
+  check(
+    'permission catalog is grouped',
+    catalog.status === 200 && Array.isArray(catalog.data.groups) && catalog.data.groups.length > 0,
+    JSON.stringify(catalog.data).slice(0, 200),
+  );
+
+  const roleName = `SMOKE_ROLE_${Date.now()}`.slice(0, 32);
+  const createdRole = await call('POST', '/admin/roles', {
+    token,
+    body: { name: roleName, description: 'Temporary smoke role', permissions: ['dashboard:view'] },
+  });
+  check('a custom role can be created', createdRole.status === 201, JSON.stringify(createdRole.data).slice(0, 200));
+
+  const patchedRole = await call('PATCH', `/admin/roles/${roleName}`, {
+    token,
+    body: { description: 'Updated', permissions: ['dashboard:view', 'batches:view'] },
+  });
+  check(
+    'a custom role can be edited',
+    patchedRole.status === 200 && patchedRole.data.permissions.length === 2,
+    JSON.stringify(patchedRole.data).slice(0, 200),
+  );
+
+  const superAdminEdit = await call('PATCH', '/admin/roles/SUPER_ADMIN', {
+    token,
+    body: { permissions: ['dashboard:view'] },
+  });
+  check('SUPER_ADMIN cannot be downgraded', superAdminEdit.status === 400, String(superAdminEdit.status));
+
+  const removedRole = await call('DELETE', `/admin/roles/${roleName}`, { token });
+  check('a custom role can be deleted', removedRole.status === 200, JSON.stringify(removedRole.data));
+
+  console.log('\n7. Rate limiting on the open endpoint');
   const responses = await Promise.all(
     Array.from({ length: 15 }, () => call('POST', '/public/redeem/verify', { code: 'AAAAAAAAAAAAAAA' })),
   );

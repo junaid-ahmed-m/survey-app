@@ -57,7 +57,6 @@ export interface RedeemCompleted {
 export interface BatchStats {
   total: number;
   unused: number;
-  reserved: number;
   used: number;
   disabled: number;
 }
@@ -66,6 +65,8 @@ export interface Batch {
   id: string;
   name: string;
   description?: string | null;
+  /** Product this batch of codes is printed on. */
+  sku?: string | null;
   surveyType: SurveyType;
   surveyId?: string | null;
   surveyUrl?: string | null;
@@ -84,12 +85,20 @@ export interface Batch {
 
 export interface BatchCode {
   id: string;
-  code: string;
+  /** Only present after an explicit reveal call. */
+  code: string | null;
   masked: string;
   status: string;
   scanCount: number;
   usedAt?: string | null;
   createdAt: string;
+  url: string | null;
+}
+
+export interface RevealedCode {
+  id: string;
+  code: string;
+  masked: string;
   url: string;
 }
 
@@ -99,6 +108,7 @@ export interface CouponType {
   name: string;
   description?: string | null;
   value?: string | null;
+  lowStockThreshold: number;
   isActive: boolean;
   inventory: { available: number; reserved: number; issued: number; expired: number; total: number };
 }
@@ -106,10 +116,13 @@ export interface CouponType {
 export interface CouponRow {
   id: string;
   couponTypeCode: string;
-  couponCode: string;
+  /** Only present after an explicit reveal call. */
+  couponCode: string | null;
+  maskedCouponCode: string;
   value?: string | null;
   status: string;
   issuedToEmail?: string | null;
+  maskedIssuedToEmail?: string | null;
   issuedAt?: string | null;
   expiresAt?: string | null;
   createdAt: string;
@@ -122,16 +135,26 @@ export interface Paginated<T> {
   items: T[];
 }
 
+export interface CouponAlert {
+  couponTypeCode: string;
+  name: string;
+  available: number;
+  reserved: number;
+  threshold: number;
+  activeBatches: number;
+  severity: 'EMPTY' | 'LOW';
+}
+
 export interface DashboardStats {
   codes: {
     total: number;
     unused: number;
-    reserved: number;
     used: number;
     disabled: number;
     redemptionRate: number;
   };
   coupons: { available: number; reserved: number; issued: number; expired: number };
+  couponAlerts: CouponAlert[];
   batches: number;
   responses: number;
   recentActivity: { id: string; action: string; entityId?: string | null; createdAt: string }[];
@@ -152,7 +175,28 @@ export interface SurveyResponseRow {
   batchId: string;
   batchName?: string | null;
   surveyType: SurveyType;
+  /** Only present when the caller may reveal e-mails and asked for it. */
   email?: string | null;
+  maskedEmail?: string | null;
   completedAt: string;
   answers: Record<string, unknown>;
+}
+
+export interface Role {
+  name: string;
+  description?: string | null;
+  permissions: string[];
+  isSystem: boolean;
+  userCount: number;
+}
+
+export interface AdminUserRow {
+  id: string;
+  email: string | null;
+  maskedEmail: string | null;
+  name?: string | null;
+  role: string;
+  isActive: boolean;
+  lastLoginAt?: string | null;
+  createdAt: string;
 }
