@@ -11,6 +11,7 @@ const NAV: { to: string; label: string; icon: string; end?: boolean; permission:
   { to: '/admin/coupons', label: 'Coupons', icon: '🎟', permission: PERMISSIONS.COUPONS_VIEW },
   { to: '/admin/surveys', label: 'Surveys', icon: '✎', permission: PERMISSIONS.SURVEYS_VIEW },
   { to: '/admin/responses', label: 'Responses', icon: '☷', permission: PERMISSIONS.RESPONSES_VIEW },
+  { to: '/admin/events', label: 'Deliveries', icon: '↻', permission: PERMISSIONS.EVENTS_VIEW },
   { to: '/admin/access', label: 'Access', icon: '🔒', permission: PERMISSIONS.ROLES_VIEW },
 ];
 

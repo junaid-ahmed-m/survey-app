@@ -21,6 +21,9 @@ model AdminUser {
   role         String    @default("VIEWER")
   isActive     Boolean   @default(true)
   lastLoginAt  DateTime?
+  /// Tokens issued before this moment are rejected, so a password change or
+  /// reset immediately invalidates any session that was already open.
+  passwordChangedAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -47,8 +50,56 @@ model Survey {
   /// JSON encoded array of questions - see SurveyQuestion in src/surveys/survey.types.ts
   questions   String   @default("[]")
   isActive    Boolean  @default(true)
+
+  // --- response forwarding (see src/events) -------------------------------
+  /// NONE | WEBHOOK | RUDDERSTACK
+  forwardTarget          String  @default("NONE")
+  /// Webhook endpoint or RudderStack data plane URL.
+  forwardUrl             String?
+  /// AES-256-GCM. Webhook signing secret or RudderStack write key.
+  forwardSecretEncrypted String?
+  forwardEventName       String  @default("Survey Completed")
+  /// false = keep no answers or e-mail in this system; the event is the record.
+  retainResponses        Boolean @default(true)
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+/// Transactional outbox for outbound analytics events. A row is written in the
+/// same transaction as the survey response, so a delivery can never be lost -
+/// the dispatcher retries with backoff until the destination acknowledges it.
+model EventDelivery {
+  id              String    @id @default(uuid())
+  eventName       String
+  /// WEBHOOK | RUDDERSTACK
+  target          String
+  endpoint        String
+  /// Snapshot of the destination credential at enqueue time (AES-256-GCM).
+  secretEncrypted String?
+  /// One delivery per redeemed code - also makes replays idempotent. Null for tests.
+  codeId          String?   @unique
+  batchId         String?
+  surveyRef       String?
+  /// JSON body to POST. PII free by construction.
+  payload         String
+  /// PENDING | DELIVERING | DELIVERED | FAILED
+  status          String    @default("PENDING")
+  attempts        Int       @default(0)
+  maxAttempts     Int       @default(12)
+  nextAttemptAt   DateTime  @default(now())
+  /// Set while a worker holds the row; stale locks are reclaimed after 5 minutes.
+  lockedAt        DateTime?
+  lastError       String?
+  lastStatusCode  Int?
+  deliveredAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  /// Drives the dispatcher's claim query.
+  @@index([status, nextAttemptAt])
+  /// Admin listing is ordered newest first.
+  @@index([createdAt])
 }
 
 /// A code-generation request. Every code inherits its survey + coupon configuration.
@@ -74,6 +125,21 @@ model Batch {
   /// DRAFT | ACTIVE | PAUSED | ARCHIVED
   status      String    @default("ACTIVE")
   expiresAt   DateTime?
+
+  // --- code generation ----------------------------------------------------
+  /// Batches above the inline threshold are produced by a background worker.
+  /// PENDING | RUNNING | COMPLETE | FAILED
+  generationStatus      String    @default("COMPLETE")
+  /// Codes written so far - drives the progress bar.
+  generatedCount        Int       @default(0)
+  /// Consecutive failed slices; the batch gives up after a few.
+  generationAttempts    Int       @default(0)
+  generationError       String?
+  /// Held while a worker is producing a slice; stale locks are reclaimed.
+  generationLockedAt    DateTime?
+  generationStartedAt   DateTime?
+  generationCompletedAt DateTime?
+
   createdById String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -82,6 +148,8 @@ model Batch {
 
   @@index([status])
   @@index([sku])
+  /// Drives the generation worker's claim query.
+  @@index([generationStatus, createdAt])
 }
 
 /// Generated codes. The clear-text code is NEVER stored:
@@ -109,6 +177,13 @@ model Code {
 
   @@index([batchId, status])
   @@index([status])
+  /// Stable ordering for the code listing and the CSV export. `createdAt` cannot
+  /// be used: a bulk insert stamps every row in the batch with the same value,
+  /// which makes keyset pagination ambiguous.
+  @@index([batchId, id])
+  /// The cleanup cron sweeps expired sessions every minute - without this it
+  /// would scan the whole table.
+  @@index([sessionExpiresAt])
 }
 
 /// Catalogue of coupon types (the "couponType" referenced by a batch).
@@ -147,8 +222,14 @@ model Coupon {
   couponType CouponType @relation(fields: [couponTypeCode], references: [code], onDelete: Cascade)
   code       Code?      @relation(fields: [codeId], references: [id], onDelete: SetNull)
 
+  /// Queue-pop order for reserveForCode: the index supplies the ORDER BY so the
+  /// scan stops at the first unlocked row instead of sorting the whole pool.
+  @@index([couponTypeCode, status, createdAt])
   @@index([couponTypeCode, status])
   @@index([status])
+  /// Cleanup cron: expired reservations and expired stock.
+  @@index([status, reservedUntil])
+  @@index([status, expiresAt])
 }
 
 /// Stored survey answers (native surveys store the full payload, external ones a receipt).
@@ -165,7 +246,9 @@ model SurveyResponse {
 
   code Code @relation(fields: [codeId], references: [id], onDelete: Cascade)
 
-  @@index([batchId])
+  @@index([batchId, completedAt])
+  /// Unfiltered response feed is ordered newest first.
+  @@index([completedAt])
 }
 
 /// Lightweight audit trail for admin + redeem activity.
@@ -180,4 +263,7 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   @@index([action, createdAt])
+  /// The dashboard reads the newest entries without an action filter.
+  @@index([createdAt])
+  @@index([entityId])
 }

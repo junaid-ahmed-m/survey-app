@@ -82,9 +82,18 @@ export class BatchesController {
     @Res() res: Response,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const csv = await this.batches.exportCsv(id, user);
     res.setHeader('Content-Disposition', `attachment; filename="batch-${id}-codes.csv"`);
-    res.send(csv);
+    // Honour back-pressure: a slow client must not make the server buffer the
+    // whole file in memory.
+    const write = (chunk: string) =>
+      new Promise<void>((resolve, reject) => {
+        if (res.write(chunk)) return resolve();
+        res.once('error', reject);
+        res.once('drain', resolve);
+      });
+
+    await this.batches.streamCsv(id, user, write);
+    res.end();
   }
 
   @Get('codes/:codeId/qr')

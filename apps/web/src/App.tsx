@@ -11,6 +11,7 @@ import BatchDetailPage from './pages/admin/BatchDetailPage';
 import CouponsPage from './pages/admin/CouponsPage';
 import SurveysPage from './pages/admin/SurveysPage';
 import ResponsesPage from './pages/admin/ResponsesPage';
+import EventsPage from './pages/admin/EventsPage';
 import AccessPage from './pages/admin/AccessPage';
 import { PERMISSIONS } from './lib/permissions';
 
@@ -70,6 +71,14 @@ export default function App() {
           element={
             <RequirePermission permission={PERMISSIONS.RESPONSES_VIEW}>
               <ResponsesPage />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="events"
+          element={
+            <RequirePermission permission={PERMISSIONS.EVENTS_VIEW}>
+              <EventsPage />
             </RequirePermission>
           }
         />

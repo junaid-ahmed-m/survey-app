@@ -12,6 +12,7 @@ import { SurveysModule } from './surveys/surveys.module';
 import { CouponsModule } from './coupons/coupons.module';
 import { BatchesModule } from './batches/batches.module';
 import { RedeemModule } from './redeem/redeem.module';
+import { EventsModule } from './events/events.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { RolesModule } from './roles/roles.module';
 import { UsersModule } from './users/users.module';
@@ -48,6 +49,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
     CouponsModule,
     BatchesModule,
     RedeemModule,
+    EventsModule,
     DashboardModule,
     RolesModule,
     UsersModule,

@@ -5,7 +5,7 @@ import { QRCodeCanvas } from 'qrcode.react';
 import { api, toApiError } from '../../lib/api';
 import { Batch, BatchCode, Paginated, RevealedCode } from '../../lib/types';
 import { formatDate, statusClass, SURVEY_TYPE_LABELS } from '../../lib/format';
-import { Modal, PageHeader, StatCard } from '../../components/admin/ui';
+import { GenerationProgress, Modal, PageHeader, StatCard } from '../../components/admin/ui';
 import { FullPageLoader, Spinner } from '../../components/Spinner';
 import { useAuth } from '../../lib/auth';
 import { PERMISSIONS } from '../../lib/permissions';
@@ -30,6 +30,9 @@ export default function BatchDetailPage() {
   const { data: batch, isLoading } = useQuery({
     queryKey: ['admin', 'batch', id],
     queryFn: async () => (await api.get<Batch>(`/admin/batches/${id}`)).data,
+    // Follow the worker while it fills the batch.
+    refetchInterval: (query) =>
+      query.state.data && query.state.data.generation.status !== 'COMPLETE' ? 3_000 : false,
   });
 
   const { data: codes } = useQuery({
@@ -99,6 +102,7 @@ export default function BatchDetailPage() {
   if (isLoading || !batch) return <FullPageLoader />;
 
   const totalPages = codes ? Math.max(Math.ceil(codes.total / codes.pageSize), 1) : 1;
+  const generating = batch.generation.status !== 'COMPLETE';
 
   return (
     <>
@@ -112,7 +116,13 @@ export default function BatchDetailPage() {
         actions={
           <>
             {canExport ? (
-              <button type="button" className="btn-secondary" onClick={downloadCsv} disabled={exporting}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={downloadCsv}
+                disabled={exporting || generating}
+                title={generating ? 'Available once every code has been generated.' : undefined}
+              >
                 {exporting ? <Spinner /> : null}
                 Export CSV
               </button>
@@ -142,8 +152,18 @@ export default function BatchDetailPage() {
         <p className="mb-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
       ) : null}
 
+      {generating ? (
+        <div className="mb-4">
+          <GenerationProgress generation={batch.generation} />
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <StatCard label="Total codes" value={batch.stats.total} />
+        <StatCard
+          label="Total codes"
+          value={batch.stats.total}
+          hint={generating ? `of ${batch.quantity.toLocaleString()} planned` : undefined}
+        />
         <StatCard label="Used" value={batch.stats.used} tone="good" />
         <StatCard label="Unused" value={batch.stats.unused} />
         <StatCard

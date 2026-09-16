@@ -13,8 +13,11 @@ async function bootstrap(): Promise<void> {
   });
   const config = app.get(ConfigService);
 
-  // Required so rate limiting keys on the real client IP behind a proxy/CDN.
-  app.set('trust proxy', 1);
+  // Rate limiting keys on req.ip, so this must match the real number of proxies
+  // in front of the API. Trusting a hop that does not exist would let a client
+  // forge X-Forwarded-For and get an unlimited number of buckets.
+  const trustProxyHops = config.get<number>('trustProxyHops') ?? 0;
+  app.set('trust proxy', trustProxyHops > 0 ? trustProxyHops : false);
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.setGlobalPrefix('api');
@@ -22,6 +25,12 @@ async function bootstrap(): Promise<void> {
     origin: config.get<string[]>('corsOrigins'),
     credentials: true,
   });
+
+  // Survey answers are free-form JSON; cap the payload well below the Express
+  // default so a single request cannot push megabytes into the database.
+  const maxBodySize = config.get<string>('maxBodySize') ?? '64kb';
+  app.useBodyParser('json', { limit: maxBodySize });
+  app.useBodyParser('urlencoded', { limit: maxBodySize, extended: true });
 
   app.useGlobalPipes(
     new ValidationPipe({

@@ -10,6 +10,13 @@ export type CodeStatus = (typeof CODE_STATUSES)[number];
 export const COUPON_STATUSES = ['AVAILABLE', 'RESERVED', 'ISSUED', 'EXPIRED'] as const;
 export type CouponStatus = (typeof COUPON_STATUSES)[number];
 
+/** Where a survey's answers are forwarded once the redemption commits. */
+export const FORWARD_TARGETS = ['NONE', 'WEBHOOK', 'RUDDERSTACK'] as const;
+export type ForwardTarget = (typeof FORWARD_TARGETS)[number];
+
+export const EVENT_DELIVERY_STATUSES = ['PENDING', 'DELIVERING', 'DELIVERED', 'FAILED'] as const;
+export type EventDeliveryStatus = (typeof EVENT_DELIVERY_STATUSES)[number];
+
 /**
  * Every admin capability is a permission string. Roles are just named bundles of
  * these, so adding a role never requires a code change.
@@ -39,6 +46,11 @@ export const PERMISSIONS = {
   RESPONSES_EXPORT: 'responses:export',
   /** See consumer e-mail addresses instead of the masked value. */
   EMAILS_REVEAL: 'emails:reveal',
+
+  /** Inspect outbound event deliveries (webhook / RudderStack). */
+  EVENTS_VIEW: 'events:view',
+  /** Retry or cancel outbound event deliveries. */
+  EVENTS_MANAGE: 'events:manage',
 
   ROLES_VIEW: 'roles:view',
   ROLES_MANAGE: 'roles:manage',
@@ -93,6 +105,13 @@ export const PERMISSION_CATALOG: {
     ],
   },
   {
+    group: 'Integrations',
+    items: [
+      { key: PERMISSIONS.EVENTS_VIEW, label: 'View outbound event deliveries' },
+      { key: PERMISSIONS.EVENTS_MANAGE, label: 'Retry / cancel event deliveries' },
+    ],
+  },
+  {
     group: 'Access control',
     items: [
       { key: PERMISSIONS.ROLES_VIEW, label: 'View roles' },
@@ -127,6 +146,8 @@ export const SYSTEM_ROLES: { name: string; description: string; permissions: Per
       PERMISSIONS.SURVEYS_MANAGE,
       PERMISSIONS.RESPONSES_VIEW,
       PERMISSIONS.RESPONSES_EXPORT,
+      PERMISSIONS.EVENTS_VIEW,
+      PERMISSIONS.EVENTS_MANAGE,
     ],
   },
   {
@@ -138,6 +159,7 @@ export const SYSTEM_ROLES: { name: string; description: string; permissions: Per
       PERMISSIONS.COUPONS_VIEW,
       PERMISSIONS.SURVEYS_VIEW,
       PERMISSIONS.RESPONSES_VIEW,
+      PERMISSIONS.EVENTS_VIEW,
     ],
   },
 ];

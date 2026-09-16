@@ -58,16 +58,28 @@ async function seedRoles() {
 
 async function seedAdmin() {
   const email = (process.env.SEED_ADMIN_EMAIL ?? 'admin@example.com').toLowerCase();
-  const password = process.env.SEED_ADMIN_PASSWORD ?? 'Admin@12345';
-  const passwordHash = await bcrypt.hash(password, 10);
+  const isProduction = process.env.NODE_ENV === 'production';
+  const password = process.env.SEED_ADMIN_PASSWORD ?? (isProduction ? '' : 'Admin@12345');
 
+  if (!password) {
+    throw new Error('SEED_ADMIN_PASSWORD must be set when seeding a production database.');
+  }
+
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  // Re-seeding must never reset a password that has since been rotated, so an
+  // existing account only has its role and active flag repaired.
   await prisma.adminUser.upsert({
     where: { email },
-    update: { passwordHash, isActive: true, role: SUPER_ADMIN_ROLE },
+    update: { isActive: true, role: SUPER_ADMIN_ROLE },
     create: { email, name: 'Platform Admin', passwordHash, role: SUPER_ADMIN_ROLE },
   });
 
-  console.log(`✔ Admin user ready: ${email} / ${password}`);
+  console.log(
+    isProduction
+      ? `✔ Admin user ready: ${email}`
+      : `✔ Admin user ready: ${email} / ${password}`,
+  );
 }
 
 async function seedCouponTypes() {

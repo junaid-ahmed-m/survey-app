@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, toApiError } from '../../lib/api';
-import { SurveyDefinition, SurveyQuestion } from '../../lib/types';
+import { ForwardTarget, SurveyDefinition, SurveyQuestion } from '../../lib/types';
 import { formatDate } from '../../lib/format';
 import { EmptyState, Modal, PageHeader } from '../../components/admin/ui';
 import { FullPageLoader, Spinner } from '../../components/Spinner';
@@ -99,6 +99,12 @@ export default function SurveysPage() {
               <p className="mt-3 text-xs text-slate-400">
                 {survey.questionCount} questions · updated {formatDate(survey.updatedAt)}
               </p>
+              {survey.forwardTarget && survey.forwardTarget !== 'NONE' ? (
+                <p className="mt-1 text-xs text-brand-700">
+                  ↻ Forwarding to {survey.forwardTarget === 'RUDDERSTACK' ? 'RudderStack' : 'a webhook'}
+                  {survey.retainResponses === false ? ' · no local storage' : ''}
+                </p>
+              ) : null}
               <button
                 type="button"
                 className="btn-secondary mt-4"
@@ -137,6 +143,14 @@ function SurveyEditor({
   const [title, setTitle] = useState(survey?.title ?? '');
   const [description, setDescription] = useState(survey?.description ?? '');
   const [isActive, setIsActive] = useState(survey?.isActive ?? true);
+  const [forwardTarget, setForwardTarget] = useState<ForwardTarget>(survey?.forwardTarget ?? 'NONE');
+  const [forwardUrl, setForwardUrl] = useState(survey?.forwardUrl ?? '');
+  const [forwardSecret, setForwardSecret] = useState('');
+  const [forwardEventName, setForwardEventName] = useState(
+    survey?.forwardEventName ?? 'Survey Completed',
+  );
+  const [retainResponses, setRetainResponses] = useState(survey?.retainResponses ?? true);
+  const [testResult, setTestResult] = useState<string | null>(null);
   const [questions, setQuestions] = useState<SurveyQuestion[]>(
     survey?.questions?.length ? survey.questions : [emptyQuestion(0)],
   );
@@ -145,12 +159,33 @@ function SurveyEditor({
   const update = (index: number, patch: Partial<SurveyQuestion>) =>
     setQuestions((prev) => prev.map((q, i) => (i === index ? { ...q, ...patch } : q)));
 
+  const sendTest = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post<{ ok: boolean; statusCode: number | null; error: string | null }>(
+          `/admin/surveys/${survey?.id}/forwarding/test`,
+        )
+      ).data,
+    onSuccess: (result) =>
+      setTestResult(
+        result.ok
+          ? `Destination accepted the test event (HTTP ${result.statusCode}).`
+          : `Failed: ${result.error ?? 'unknown error'}`,
+      ),
+    onError: (err) => setTestResult(`Failed: ${toApiError(err).message}`),
+  });
+
   const mutation = useMutation({
     mutationFn: async () => {
       const payload = {
         title: title.trim(),
         description: description.trim() || undefined,
         isActive,
+        forwardTarget,
+        forwardUrl: forwardTarget === 'NONE' ? undefined : forwardUrl.trim(),
+        forwardSecret: forwardSecret.trim() || undefined,
+        forwardEventName: forwardEventName.trim() || undefined,
+        retainResponses,
         questions: questions.map((q, index) => ({
           id: q.id || `q${index + 1}`,
           type: q.type,
@@ -348,6 +383,131 @@ function SurveyEditor({
         >
           + Add question
         </button>
+
+        <fieldset className="rounded-2xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Forward responses
+          </legend>
+          <p className="text-xs text-slate-500">
+            Each completed response is queued and pushed to your system. Deliveries are retried until
+            they are acknowledged — track them under Deliveries. Payloads never include an e-mail
+            address; consumers are identified by a one-way hash.
+          </p>
+
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            {(
+              [
+                { value: 'NONE', label: 'Off', hint: 'Keep responses here only' },
+                { value: 'WEBHOOK', label: 'Webhook', hint: 'Signed HTTPS POST' },
+                { value: 'RUDDERSTACK', label: 'RudderStack', hint: 'track event' },
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setForwardTarget(option.value)}
+                className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                  forwardTarget === option.value
+                    ? 'border-brand-500 bg-brand-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <span className="block text-sm font-medium text-slate-800">{option.label}</span>
+                <span className="block text-xs text-slate-500">{option.hint}</span>
+              </button>
+            ))}
+          </div>
+
+          {forwardTarget !== 'NONE' ? (
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="label" htmlFor="survey-forward-url">
+                  {forwardTarget === 'RUDDERSTACK' ? 'Data plane URL' : 'Endpoint URL'}
+                </label>
+                <input
+                  id="survey-forward-url"
+                  className="input"
+                  required
+                  placeholder={
+                    forwardTarget === 'RUDDERSTACK'
+                      ? 'https://your-org.dataplane.rudderstack.com'
+                      : 'https://api.example.com/hooks/survey'
+                  }
+                  value={forwardUrl ?? ''}
+                  onChange={(event) => setForwardUrl(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="survey-forward-secret">
+                  {forwardTarget === 'RUDDERSTACK' ? 'Write key' : 'Signing secret'}{' '}
+                  {survey?.forwardSecretSet ? (
+                    <span className="text-slate-400">(stored — leave blank to keep)</span>
+                  ) : null}
+                </label>
+                <input
+                  id="survey-forward-secret"
+                  className="input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={forwardSecret}
+                  onChange={(event) => setForwardSecret(event.target.value)}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  {forwardTarget === 'RUDDERSTACK'
+                    ? 'Sent as HTTP basic auth, encrypted at rest.'
+                    : 'Used for the X-Webhook-Signature HMAC so you can verify the sender.'}
+                </p>
+              </div>
+              <div>
+                <label className="label" htmlFor="survey-forward-event">
+                  Event name
+                </label>
+                <input
+                  id="survey-forward-event"
+                  className="input"
+                  value={forwardEventName}
+                  onChange={(event) => setForwardEventName(event.target.value)}
+                />
+              </div>
+
+              <label className="flex items-start gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
+                  checked={!retainResponses}
+                  onChange={(event) => setRetainResponses(!event.target.checked)}
+                />
+                <span>
+                  Do not store responses in this system
+                  <span className="block text-xs text-slate-500">
+                    Answers and e-mail addresses are dropped after the event is queued. The queued
+                    event becomes the system of record.
+                  </span>
+                </span>
+              </label>
+
+              {survey ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={sendTest.isPending}
+                    onClick={() => {
+                      setTestResult(null);
+                      sendTest.mutate();
+                    }}
+                  >
+                    {sendTest.isPending ? <Spinner /> : null}
+                    Send test event
+                  </button>
+                  {testResult ? <span className="text-xs text-slate-600">{testResult}</span> : null}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">Save the survey to send a test event.</p>
+              )}
+            </div>
+          ) : null}
+        </fieldset>
 
         {error ? <p className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p> : null}
 

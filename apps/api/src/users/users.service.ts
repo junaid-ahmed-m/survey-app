@@ -45,7 +45,7 @@ export class UsersService {
         email,
         name: dto.name,
         role,
-        passwordHash: await bcrypt.hash(dto.password, 10),
+        passwordHash: await bcrypt.hash(dto.password, 12),
       },
     });
     return { id: user.id, email: user.email, name: user.name, role: user.role, isActive: user.isActive };
@@ -71,7 +71,10 @@ export class UsersService {
         name: dto.name,
         isActive: dto.isActive,
         ...(role ? { role } : {}),
-        ...(dto.password ? { passwordHash: await bcrypt.hash(dto.password, 10) } : {}),
+        // Stamping the change retires tokens the old password already produced.
+        ...(dto.password
+          ? { passwordHash: await bcrypt.hash(dto.password, 12), passwordChangedAt: new Date() }
+          : {}),
       },
     });
     return {

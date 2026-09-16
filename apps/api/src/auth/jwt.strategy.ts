@@ -10,6 +10,7 @@ export interface JwtPayload {
   sub: string;
   email: string;
   role: string;
+  iat?: number;
 }
 
 @Injectable()
@@ -29,6 +30,19 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     const user = await this.prisma.adminUser.findUnique({ where: { id: payload.sub } });
     if (!user || !user.isActive) {
       throw new UnauthorizedException({ code: 'UNAUTHORIZED', message: 'Session is no longer valid.' });
+    }
+    // A password change retires every token minted before it. `iat` only has
+    // second precision, so allow a second of slack to avoid logging out the
+    // session that performed the change.
+    if (
+      user.passwordChangedAt &&
+      payload.iat !== undefined &&
+      payload.iat * 1000 < user.passwordChangedAt.getTime() - 1000
+    ) {
+      throw new UnauthorizedException({
+        code: 'UNAUTHORIZED',
+        message: 'Your password changed. Please sign in again.',
+      });
     }
     // Resolved per request so a role change takes effect without a new token.
     const permissions = await resolvePermissions(this.prisma, user.role);

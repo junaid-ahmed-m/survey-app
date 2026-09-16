@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import { Batch, Paginated } from '../../lib/types';
 import { formatDate, statusClass, SURVEY_TYPE_LABELS } from '../../lib/format';
-import { EmptyState, PageHeader } from '../../components/admin/ui';
+import { EmptyState, GenerationProgress, PageHeader } from '../../components/admin/ui';
 import { CreateBatchModal } from '../../components/admin/CreateBatchModal';
 import { FullPageLoader } from '../../components/Spinner';
 import { useAuth } from '../../lib/auth';
@@ -27,6 +27,13 @@ export default function BatchesPage() {
           params: { search: search || undefined, status: status || undefined, page, pageSize: 20 },
         })
       ).data,
+    // Keep polling while the worker is still producing codes for a batch.
+    refetchInterval: (query) =>
+      query.state.data?.items.some(
+        (batch) => batch.generation.status === 'PENDING' || batch.generation.status === 'RUNNING',
+      )
+        ? 5_000
+        : false,
   });
 
   return (
@@ -105,6 +112,11 @@ export default function BatchesPage() {
                   <span>{batch.stats.used} used</span>
                   <span>{batch.stats.unused} unused</span>
                 </div>
+                {batch.generation.status !== 'COMPLETE' ? (
+                  <div className="mt-3">
+                    <GenerationProgress generation={batch.generation} compact />
+                  </div>
+                ) : null}
               </Link>
             ))}
           </div>
@@ -138,7 +150,13 @@ export default function BatchesPage() {
                     <td className="px-4 py-3 text-slate-600">{SURVEY_TYPE_LABELS[batch.surveyType]}</td>
                     <td className="px-4 py-3 text-slate-600">{batch.couponType}</td>
                     <td className="px-4 py-3 tabular-nums text-slate-600">
-                      {batch.stats.used}/{batch.stats.total}
+                      {batch.generation.status === 'COMPLETE' ? (
+                        `${batch.stats.used}/${batch.stats.total}`
+                      ) : (
+                        <div className="w-40">
+                          <GenerationProgress generation={batch.generation} compact />
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`badge ${statusClass(batch.status)}`}>{batch.status}</span>

@@ -16,10 +16,16 @@ import { CouponsService } from '../coupons/coupons.service';
 import { SurveysService } from '../surveys/surveys.service';
 import { ContentfulService } from '../surveys/contentful.service';
 import { MailService } from '../mail/mail.service';
+import { EventsService } from '../events/events.service';
 import { REDEEM_ERRORS } from '../common/constants';
 import { isUniqueViolation } from '../common/prisma-error.util';
 import { ResolvedSurvey } from '../surveys/survey.types';
 import { CompleteRedemptionDto, VerifyCodeDto } from './dto/redeem.dto';
+
+/** Bounds for the attacker-controlled answers object. */
+const MAX_ANSWER_FIELDS = 100;
+const MAX_ANSWER_OPTIONS = 50;
+const MAX_ANSWER_LENGTH = 2000;
 
 @Injectable()
 export class RedeemService {
@@ -33,6 +39,7 @@ export class RedeemService {
     private readonly surveys: SurveysService,
     private readonly contentful: ContentfulService,
     private readonly mail: MailService,
+    private readonly events: EventsService,
     private readonly config: ConfigService,
   ) {}
 
@@ -264,9 +271,21 @@ export class RedeemService {
     if (record.batch.surveyType === 'NATIVE') {
       await this.validateNativeAnswers(record.batch.surveyId, dto.answers ?? {});
     }
+    // Native surveys can push their answers to an external system and, when they
+    // do, opt out of keeping consumer data here at all.
+    const forwarding =
+      record.batch.surveyType === 'NATIVE' && record.batch.surveyId
+        ? await this.surveys.getForwarding(record.batch.surveyId)
+        : null;
+    const forwardConfig = forwarding && this.events.isEnabled(forwarding.config) ? forwarding.config : null;
+    const retain = forwarding ? forwarding.retainResponses : true;
+    // Never store or forward the raw body: unknown keys are dropped and every
+    // value is bounded, so a crafted request cannot inflate the row or the event.
+    const answers = await this.sanitizeAnswers(record.batch, dto.answers ?? {});
 
-    // Answers, the code flip and the coupon hand-out commit together: a failure
-    // here leaves the session replayable instead of burning the reward.
+    // Answers, the code flip, the coupon hand-out and the outbound event commit
+    // together: a failure here leaves the session replayable instead of burning
+    // the reward, and a delivered redemption always has its event queued.
     let issued: NonNullable<Awaited<ReturnType<CouponsService['issueForCode']>>>;
     try {
       issued = await this.prisma.$transaction(async (tx) => {
@@ -276,8 +295,9 @@ export class RedeemService {
             batchId: record.batchId,
             surveyType: record.batch.surveyType,
             surveyRef: record.batch.surveyId ?? record.batch.surveyUrl ?? null,
-            answers: JSON.stringify(dto.answers ?? {}),
-            email,
+            // The forwarded event is the system of record when retention is off.
+            answers: retain ? JSON.stringify(answers) : '{}',
+            email: retain ? email : null,
           },
         });
         await tx.code.update({
@@ -285,13 +305,31 @@ export class RedeemService {
           data: { status: 'USED', usedAt: record.usedAt ?? new Date(), sessionExpiresAt: null },
         });
 
-        const coupon = await this.coupons.issueForCode(record.id, email, tx);
+        const coupon = await this.coupons.issueForCode(record.id, retain ? email : null, tx);
         if (!coupon) {
           throw new ServiceUnavailableException({
             code: REDEEM_ERRORS.COUPONS_EXHAUSTED,
             message: 'We are unable to cater to this request right now. Please try again later.',
           });
         }
+
+        if (forwardConfig) {
+          await this.events.enqueueSurveyCompleted(tx, forwardConfig, {
+            codeId: record.id,
+            batchId: record.batchId,
+            batchName: record.batch.name,
+            sku: record.batch.sku,
+            surveyType: record.batch.surveyType,
+            surveyRef: record.batch.surveyId ?? null,
+            surveyTitle: forwarding?.title ?? null,
+            couponTypeCode: coupon.couponTypeCode,
+            couponValue: coupon.value,
+            email,
+            answers,
+            completedAt: new Date(),
+          });
+        }
+
         return coupon;
       });
     } catch (error) {
@@ -439,6 +477,43 @@ export class RedeemService {
         details: { missing },
       });
     }
+  }
+
+  /**
+   * The answers object is attacker controlled, so it is rebuilt rather than
+   * trusted: for a native survey only the declared question ids survive, and
+   * every value is bounded before it reaches the database or an outbound event.
+   */
+  private async sanitizeAnswers(
+    batch: Batch,
+    answers: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const allowed =
+      batch.surveyType === 'NATIVE' && batch.surveyId
+        ? new Set((await this.surveys.getDefinition(batch.surveyId))?.questions.map((q) => q.id) ?? [])
+        : null;
+
+    const clamp = (value: unknown): unknown => {
+      if (typeof value === 'string') return value.slice(0, MAX_ANSWER_LENGTH);
+      if (typeof value === 'number' || typeof value === 'boolean') return value;
+      if (Array.isArray(value)) {
+        return value
+          .slice(0, MAX_ANSWER_OPTIONS)
+          .map((item) => (typeof item === 'string' ? item.slice(0, MAX_ANSWER_LENGTH) : item))
+          .filter((item) => ['string', 'number', 'boolean'].includes(typeof item));
+      }
+      return undefined;
+    };
+
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(answers)) {
+      if (Object.keys(sanitized).length >= MAX_ANSWER_FIELDS) break;
+      if (allowed && !allowed.has(key)) continue;
+      if (!allowed && key.length > 64) continue;
+      const clamped = clamp(value);
+      if (clamped !== undefined) sanitized[key] = clamped;
+    }
+    return sanitized;
   }
 
   private async audit(

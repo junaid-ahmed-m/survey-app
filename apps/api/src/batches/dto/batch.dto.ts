@@ -68,9 +68,10 @@ export class CreateBatchDto {
   @Max(32)
   codeLength!: number;
 
+  /** Above 10 000 the codes are produced by the background worker. */
   @IsInt()
   @Min(1)
-  @Max(50000)
+  @Max(1000000)
   quantity!: number;
 
   @IsOptional()

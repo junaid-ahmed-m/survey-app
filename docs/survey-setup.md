@@ -13,6 +13,11 @@ via the *Survey source* selector, which maps to `surveyType` on the batch:
 Regardless of the provider, the coupon is **reserved before the survey is shown**, so a
 user is never sent into a survey the platform cannot reward.
 
+> Native surveys can additionally **forward their answers** to a webhook or RudderStack —
+> and optionally store nothing in this platform at all. That is a property of the survey
+> rather than the provider, and is documented in
+> [docs/platform-guide.md § 6](platform-guide.md#6-response-forwarding-webhook--rudderstack).
+
 ---
 
 ## 1. Contentful

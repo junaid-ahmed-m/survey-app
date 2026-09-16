@@ -253,8 +253,13 @@ export class CouponsService {
    * Flips the coupon held by `codeId` to ISSUED. The `status: 'RESERVED'` guard makes
    * this a compare-and-swap, so a hold released by the cleanup cron can never be
    * issued behind our back. Pass `client` to run inside the caller's transaction.
+   * `email` is null when the survey opted out of storing consumer data here.
    */
-  async issueForCode(codeId: string, email: string, client: Prisma.TransactionClient = this.prisma) {
+  async issueForCode(
+    codeId: string,
+    email: string | null,
+    client: Prisma.TransactionClient = this.prisma,
+  ) {
     const claimed = await client.coupon.updateMany({
       where: { codeId, status: 'RESERVED' },
       data: { status: 'ISSUED', issuedToEmail: email, issuedAt: new Date(), reservedUntil: null },

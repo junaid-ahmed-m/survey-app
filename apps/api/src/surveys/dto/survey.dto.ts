@@ -11,6 +11,35 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { FORWARD_TARGETS } from '../../common/constants';
+
+/** Where the answers are pushed once a redemption commits. */
+export class SurveyForwardingDto {
+  @IsOptional()
+  @IsIn(FORWARD_TARGETS as unknown as string[])
+  forwardTarget?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  forwardUrl?: string;
+
+  /** Webhook signing secret or RudderStack write key. Blank on update = keep the stored one. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  forwardSecret?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  forwardEventName?: string;
+
+  /** false = this platform keeps no answers or e-mail for the survey. */
+  @IsOptional()
+  @IsBoolean()
+  retainResponses?: boolean;
+}
 
 export class SurveyOptionDto {
   @IsString()
@@ -59,7 +88,7 @@ export class SurveyQuestionDto {
   max?: number;
 }
 
-export class CreateSurveyDto {
+export class CreateSurveyDto extends SurveyForwardingDto {
   @IsString()
   @MinLength(2)
   @MaxLength(150)
@@ -81,7 +110,7 @@ export class CreateSurveyDto {
   isActive?: boolean;
 }
 
-export class UpdateSurveyDto {
+export class UpdateSurveyDto extends SurveyForwardingDto {
   @IsOptional()
   @IsString()
   @MinLength(2)

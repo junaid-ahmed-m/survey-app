@@ -17,12 +17,41 @@ export interface SurveyQuestion {
   maxLength?: number;
 }
 
+export type ForwardTarget = 'NONE' | 'WEBHOOK' | 'RUDDERSTACK';
+
 export interface SurveyDefinition {
   id: string;
   title: string;
   description?: string | null;
   questions: SurveyQuestion[];
   isActive?: boolean;
+  forwardTarget?: ForwardTarget;
+  forwardUrl?: string | null;
+  forwardEventName?: string;
+  /** The secret itself is never returned by the API. */
+  forwardSecretSet?: boolean;
+  retainResponses?: boolean;
+}
+
+export interface EventDelivery {
+  id: string;
+  eventName: string;
+  target: ForwardTarget;
+  endpoint: string;
+  status: 'PENDING' | 'DELIVERING' | 'DELIVERED' | 'FAILED';
+  attempts: number;
+  maxAttempts: number;
+  nextAttemptAt: string;
+  lastError?: string | null;
+  lastStatusCode?: number | null;
+  deliveredAt?: string | null;
+  createdAt: string;
+  batchId?: string | null;
+  payload?: unknown;
+}
+
+export interface EventDeliveryPage extends Paginated<EventDelivery> {
+  counts: { pending: number; delivered: number; failed: number };
 }
 
 export type ResolvedSurvey =
@@ -61,6 +90,17 @@ export interface BatchStats {
   disabled: number;
 }
 
+/** Progress of the background code generator. */
+export interface BatchGeneration {
+  status: 'PENDING' | 'RUNNING' | 'COMPLETE' | 'FAILED';
+  generated: number;
+  total: number;
+  percent: number;
+  error?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
 export interface Batch {
   id: string;
   name: string;
@@ -80,6 +120,7 @@ export interface Batch {
   expiresAt?: string | null;
   createdAt: string;
   stats: BatchStats;
+  generation: BatchGeneration;
   couponsAvailable?: number;
 }
 

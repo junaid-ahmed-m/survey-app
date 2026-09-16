@@ -1,10 +1,11 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.service';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { CodeGeneratorService, DEFAULT_CHARSET } from '../common/crypto/code-generator.service';
 import { SurveysService } from '../surveys/surveys.service';
+import { CodeGenerationService, INLINE_GENERATION_LIMIT } from './code-generation.service';
 import {
   CreateBatchDto,
   ListBatchesQueryDto,
@@ -13,7 +14,8 @@ import {
   UpdateBatchStatusDto,
 } from './dto/batch.dto';
 
-const INSERT_CHUNK = 500;
+/** Rows pulled per round trip while streaming a CSV export. */
+const EXPORT_CHUNK = 1_000;
 
 @Injectable()
 export class BatchesService {
@@ -24,6 +26,7 @@ export class BatchesService {
     private readonly crypto: CryptoService,
     private readonly generator: CodeGeneratorService,
     private readonly surveys: SurveysService,
+    private readonly generation: CodeGenerationService,
     private readonly config: ConfigService,
   ) {}
 
@@ -65,6 +68,10 @@ export class BatchesService {
       });
     }
 
+    // Anything large is queued: encrypting hundreds of thousands of codes inside
+    // the request would block the event loop and time the caller out.
+    const inline = dto.quantity <= INLINE_GENERATION_LIMIT;
+
     const batch = await this.prisma.batch.create({
       data: {
         name: dto.name,
@@ -81,64 +88,25 @@ export class BatchesService {
         status: 'ACTIVE',
         expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
         createdById,
+        generationStatus: inline ? 'COMPLETE' : 'PENDING',
+        generationStartedAt: new Date(),
+        ...(inline ? { generationCompletedAt: new Date() } : {}),
       },
     });
 
-    const generated = await this.generateCodesForBatch(batch.id, dto.quantity, {
-      charset,
-      length: dto.codeLength,
-      prefix,
-    });
-
-    return { ...(await this.findOne(batch.id)), generated };
-  }
-
-  /**
-   * Generates and persists codes. Collisions with existing rows are detected by the
-   * unique index on `codeHash`; those rows are simply retried with new values.
-   */
-  private async generateCodesForBatch(
-    batchId: string,
-    quantity: number,
-    options: { charset: string; length: number; prefix: string },
-  ): Promise<number> {
-    let remaining = quantity;
-    let inserted = 0;
-    let round = 0;
-
-    while (remaining > 0 && round < 10) {
-      const candidates = this.generator.generateMany(remaining, options);
-      const rows = candidates.map((code) => ({
-        batchId,
-        codeHash: this.crypto.hash(code),
-        codeEncrypted: this.crypto.encrypt(code),
-        codeMasked: this.crypto.mask(code),
-        status: 'UNUSED',
-      }));
-
-      for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
-        const chunk = rows.slice(i, i + INSERT_CHUNK);
-        // SQLite has no `skipDuplicates`, so collisions are filtered explicitly.
-        const clashes = await this.prisma.code.findMany({
-          where: { codeHash: { in: chunk.map((row) => row.codeHash) } },
-          select: { codeHash: true },
-        });
-        const taken = new Set(clashes.map((c) => c.codeHash));
-        const fresh = chunk.filter((row) => !taken.has(row.codeHash));
-        if (fresh.length === 0) continue;
-
-        const result = await this.prisma.code.createMany({ data: fresh });
-        inserted += result.count;
+    let generated = 0;
+    if (inline) {
+      generated = await this.generation.generateInto(batch, dto.quantity);
+      await this.prisma.batch.update({
+        where: { id: batch.id },
+        data: { generatedCount: generated },
+      });
+      if (generated < dto.quantity) {
+        this.logger.error(`Batch ${batch.id}: only ${generated}/${dto.quantity} codes generated.`);
       }
-
-      remaining = quantity - inserted;
-      round += 1;
     }
 
-    if (remaining > 0) {
-      this.logger.error(`Batch ${batchId}: only ${inserted}/${quantity} codes could be generated.`);
-    }
-    return inserted;
+    return { ...(await this.findOne(batch.id)), generated, queued: !inline };
   }
 
   private async validateSurveyConfig(dto: CreateBatchDto): Promise<void> {
@@ -205,6 +173,7 @@ export class BatchesService {
   private withStats(batch: any, stats: { batchId: string; status: string; _count: { _all: number } }[]) {
     const mine = stats.filter((s) => s.batchId === batch.id);
     const get = (status: string) => mine.find((s) => s.status === status)?._count._all ?? 0;
+    const generated = Math.min(batch.generatedCount ?? 0, batch.quantity);
     return {
       ...batch,
       stats: {
@@ -212,6 +181,15 @@ export class BatchesService {
         unused: get('UNUSED'),
         used: get('USED'),
         disabled: get('DISABLED'),
+      },
+      generation: {
+        status: batch.generationStatus,
+        generated,
+        total: batch.quantity,
+        percent: batch.quantity > 0 ? Math.floor((generated / batch.quantity) * 100) : 100,
+        error: batch.generationError ?? null,
+        startedAt: batch.generationStartedAt ?? null,
+        completedAt: batch.generationCompletedAt ?? null,
       },
     };
   }
@@ -257,7 +235,9 @@ export class BatchesService {
       this.prisma.code.count({ where }),
       this.prisma.code.findMany({
         where,
-        orderBy: { createdAt: 'asc' },
+        // Every code in a batch shares one createdAt, so `id` is the only stable
+        // sort key - ordering by the timestamp makes paging skip or repeat rows.
+        orderBy: { id: 'asc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
@@ -292,33 +272,67 @@ export class BatchesService {
     return { id: code.id, code: plain, masked: code.codeMasked, url: this.redeemUrl(plain) };
   }
 
-  async exportCsv(batchId: string, actor: { id: string }): Promise<string> {
+  /**
+   * Streams the batch as CSV. A batch can hold millions of codes, so rows are
+   * pulled in cursor-paged chunks and written straight to the response instead
+   * of being decrypted into one big string in memory.
+   */
+  async streamCsv(
+    batchId: string,
+    actor: { id: string },
+    write: (chunk: string) => Promise<void>,
+  ): Promise<number> {
     const batch = await this.findOne(batchId);
-    const codes = await this.prisma.code.findMany({
-      where: { batchId },
-      orderBy: { createdAt: 'asc' },
-    });
 
-    const header = ['batch', 'sku', 'code', 'url', 'status', 'used_at'];
-    const escape = (value: string) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    // Exporting half a batch would send an incomplete print file to a supplier.
+    if (batch.generationStatus !== 'COMPLETE') {
+      throw new ConflictException({
+        code: 'GENERATION_IN_PROGRESS',
+        message: 'This batch is still generating its codes. Please wait until it finishes.',
+      });
+    }
 
-    const lines = codes.map((code) => {
-      const plain = this.safeDecrypt(code.codeEncrypted);
-      return [
-        batch.name,
-        batch.sku ?? '',
-        plain,
-        this.redeemUrl(plain),
-        code.status,
-        code.usedAt?.toISOString() ?? '',
-      ]
-        .map(escape)
-        .join(',');
-    });
+    const escape = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
-    await this.audit('CODES_EXPORTED', actor.id, batchId, { count: codes.length });
+    await write(['batch', 'sku', 'code', 'url', 'status', 'used_at'].join(',') + '\r\n');
 
-    return [header.join(','), ...lines].join('\r\n');
+    let cursor: string | undefined;
+    let exported = 0;
+
+    for (;;) {
+      const rows = await this.prisma.code.findMany({
+        where: { batchId },
+        orderBy: { id: 'asc' },
+        take: EXPORT_CHUNK,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      if (rows.length === 0) break;
+
+      await write(
+        rows
+          .map((code) => {
+            const plain = this.safeDecrypt(code.codeEncrypted);
+            return [
+              batch.name,
+              batch.sku ?? '',
+              plain,
+              this.redeemUrl(plain),
+              code.status,
+              code.usedAt?.toISOString() ?? '',
+            ]
+              .map(escape)
+              .join(',');
+          })
+          .join('\r\n') + '\r\n',
+      );
+
+      exported += rows.length;
+      cursor = rows[rows.length - 1].id;
+      if (rows.length < EXPORT_CHUNK) break;
+    }
+
+    await this.audit('CODES_EXPORTED', actor.id, batchId, { count: exported });
+    return exported;
   }
 
   async qrDataUrl(codeId: string): Promise<{ code: string; url: string; dataUrl: string }> {

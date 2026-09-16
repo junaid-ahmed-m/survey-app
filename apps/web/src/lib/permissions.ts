@@ -19,6 +19,9 @@ export const PERMISSIONS = {
   RESPONSES_EXPORT: 'responses:export',
   EMAILS_REVEAL: 'emails:reveal',
 
+  EVENTS_VIEW: 'events:view',
+  EVENTS_MANAGE: 'events:manage',
+
   ROLES_VIEW: 'roles:view',
   ROLES_MANAGE: 'roles:manage',
   USERS_VIEW: 'users:view',

@@ -1,4 +1,5 @@
 import { ReactNode } from 'react';
+import { BatchGeneration } from '../../lib/types';
 
 export function PageHeader({
   title,
@@ -56,6 +57,53 @@ export function EmptyState({ title, message, action }: { title: string; message:
       <p className="mt-3 text-sm font-semibold text-slate-700">{title}</p>
       <p className="mt-1 max-w-sm text-sm text-slate-500">{message}</p>
       {action ? <div className="mt-5">{action}</div> : null}
+    </div>
+  );
+}
+
+/** Progress of a batch whose codes are being produced in the background. */
+export function GenerationProgress({
+  generation,
+  compact = false,
+}: {
+  generation: BatchGeneration;
+  compact?: boolean;
+}) {
+  if (generation.status === 'COMPLETE') return null;
+
+  const failed = generation.status === 'FAILED';
+  const tone = failed ? 'bg-rose-500' : 'bg-brand-600';
+  const label = failed
+    ? 'Generation failed'
+    : generation.status === 'PENDING'
+      ? 'Queued'
+      : 'Generating codes';
+
+  return (
+    <div className={compact ? '' : 'card p-4 sm:p-5'}>
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className={`font-medium ${failed ? 'text-rose-700' : 'text-slate-600'}`}>
+          {label}
+          {failed ? '' : '…'}
+        </span>
+        <span className="tabular-nums text-slate-500">
+          {generation.generated.toLocaleString()} / {generation.total.toLocaleString()}
+        </span>
+      </div>
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${tone}`}
+          style={{ width: `${Math.max(generation.percent, failed ? 100 : 2)}%` }}
+        />
+      </div>
+      {failed && generation.error ? (
+        <p className="mt-2 text-xs text-rose-600">{generation.error}</p>
+      ) : !compact ? (
+        <p className="mt-2 text-xs text-slate-400">
+          Codes appear as they are produced. You can leave this page — the export unlocks when the
+          batch is complete.
+        </p>
+      ) : null}
     </div>
   );
 }

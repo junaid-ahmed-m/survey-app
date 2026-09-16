@@ -7,6 +7,8 @@ import { Spinner } from '../Spinner';
 import { formatCompact } from '../../lib/format';
 
 const DEFAULT_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+/** Above this the API queues the batch and a worker fills it in the background. */
+const INLINE_GENERATION_LIMIT = 10_000;
 
 interface Props {
   open: boolean;
@@ -122,6 +124,7 @@ export function CreateBatchModal({ open, onClose }: Props) {
 
   const availableForType = couponTypes?.find((t) => t.code === form.couponType)?.inventory.available ?? 0;
   const shortInventory = form.couponType !== '' && availableForType < Number(form.quantity);
+  const queued = Number(form.quantity) > INLINE_GENERATION_LIMIT;
 
   return (
     <Modal open={open} title="Generate a new batch of codes" onClose={onClose} size="lg">
@@ -312,11 +315,17 @@ export function CreateBatchModal({ open, onClose }: Props) {
                 className="input"
                 type="number"
                 min={1}
-                max={50000}
+                max={1000000}
                 required
                 value={form.quantity}
                 onChange={(event) => set('quantity', Number(event.target.value))}
               />
+              {queued ? (
+                <p className="mt-1 text-xs text-slate-500">
+                  Generated in the background — the batch is created straight away and fills up as
+                  the worker runs.
+                </p>
+              ) : null}
             </div>
             <div>
               <label className="label" htmlFor="prefix">
@@ -403,7 +412,7 @@ export function CreateBatchModal({ open, onClose }: Props) {
           </button>
           <button type="submit" className="btn-primary" disabled={mutation.isPending}>
             {mutation.isPending ? <Spinner /> : null}
-            Generate {form.quantity} codes
+            {queued ? 'Queue' : 'Generate'} {Number(form.quantity).toLocaleString()} codes
           </button>
         </div>
       </form>
