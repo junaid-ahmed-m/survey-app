@@ -62,7 +62,7 @@ export default function SurveyReturnPage() {
 
   if (phase.kind === 'loading') {
     return (
-      <PublicShell>
+      <PublicShell compact>
         <FullPageLoader label="Restoring your session…" />
       </PublicShell>
     );
@@ -70,7 +70,7 @@ export default function SurveyReturnPage() {
 
   if (phase.kind === 'error') {
     return (
-      <PublicShell>
+      <PublicShell compact>
         <StateCard
           title="We could not restore your session"
           message={phase.message}
@@ -86,7 +86,7 @@ export default function SurveyReturnPage() {
 
   if (phase.kind === 'done') {
     return (
-      <PublicShell>
+      <PublicShell compact>
         {phase.result.coupon ? (
           <RewardCard
             coupon={phase.result.coupon}
@@ -101,17 +101,40 @@ export default function SurveyReturnPage() {
   }
 
   return (
-    <PublicShell>
+    <PublicShell compact>
       <div className="card animate-fade-up p-6 sm:p-8">
-        <h1 className="text-xl font-semibold tracking-tight text-slate-900">Almost there!</h1>
-        <p className="mt-2 text-sm text-slate-600">
-          Enter your e-mail and we will show your coupon here and send you a copy.
-        </p>
-        <div className="mt-5">
+        <div className="text-center">
+          <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-50 text-brand-600">
+            <svg viewBox="0 0 24 24" className="h-8 w-8" fill="none" aria-hidden>
+              <rect
+                x="2.5"
+                y="5"
+                width="19"
+                height="14"
+                rx="2.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <path
+                d="M3.5 7l8.5 6 8.5-6"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <h1 className="mt-5 text-xl font-bold tracking-tight text-ink-900">Almost there!</h1>
+          <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-slate-500">
+            Where should we send your coupon? We&apos;ll show it here and e-mail a copy as a backup.
+          </p>
+        </div>
+        <div className="mt-6">
           <EmailOnlyForm
             submitting={submitting}
             error={submitError}
             onSubmit={(email) => void claim(email)}
+            buttonLabel="Get My Coupon"
           />
         </div>
       </div>

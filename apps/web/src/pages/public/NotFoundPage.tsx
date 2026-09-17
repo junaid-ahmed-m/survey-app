@@ -4,7 +4,7 @@ import { StateCard } from '../../components/StateCard';
 
 export default function NotFoundPage() {
   return (
-    <PublicShell>
+    <PublicShell compact>
       <StateCard
         tone="info"
         title="Page not found"

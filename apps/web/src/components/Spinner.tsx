@@ -13,9 +13,9 @@ export function Spinner({ className = 'h-5 w-5' }: { className?: string }) {
 
 export function FullPageLoader({ label = 'Loading…' }: { label?: string }) {
   return (
-    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-slate-500">
-      <Spinner className="h-8 w-8 text-brand-600" />
-      <p className="text-sm">{label}</p>
+    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-slate-400">
+      <Spinner className="h-9 w-9 text-brand-600" />
+      <p className="text-sm font-medium">{label}</p>
     </div>
   );
 }

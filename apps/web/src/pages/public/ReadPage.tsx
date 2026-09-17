@@ -79,7 +79,7 @@ export default function ReadPage() {
 
   if (phase.kind === 'loading') {
     return (
-      <PublicShell>
+      <PublicShell compact>
         <FullPageLoader label="Checking your code…" />
       </PublicShell>
     );
@@ -90,7 +90,7 @@ export default function ReadPage() {
       phase.code,
     );
     return (
-      <PublicShell>
+      <PublicShell compact>
         <StateCard
           tone={retryable ? 'warning' : 'error'}
           title={ERROR_TITLES[phase.code] ?? 'Something went wrong'}
@@ -113,7 +113,7 @@ export default function ReadPage() {
 
   if (phase.kind === 'done') {
     return (
-      <PublicShell>
+      <PublicShell compact>
         {phase.result.coupon ? (
           <RewardCard
             coupon={phase.result.coupon}
@@ -131,29 +131,48 @@ export default function ReadPage() {
 
   if (session.survey.type === 'THIRD_PARTY') {
     return (
-      <PublicShell>
-        <div className="card animate-fade-up p-6 sm:p-8">
-          <h1 className="text-xl font-semibold tracking-tight text-slate-900">{session.campaign.name}</h1>
-          <p className="mt-2 text-sm text-slate-600">
-            Your code is valid. Complete the short survey on our partner&apos;s site, then come back here to
-            claim your reward.
-          </p>
-          <a
-            className="btn-primary mt-6 w-full"
-            href={session.survey.url}
-            rel="noopener noreferrer nofollow"
-          >
-            Start the survey
-          </a>
-          <p className="mt-4 text-center text-xs text-slate-400">
-            Already finished it? Enter your e-mail below to receive your coupon.
-          </p>
-          <div className="mt-4 border-t border-slate-100 pt-5">
-            <EmailOnlyForm
-              submitting={submitting}
-              error={submitError}
-              onSubmit={(email) => void submit({}, email)}
-            />
+      <PublicShell compact>
+        <div className="animate-fade-up">
+          <div className="card overflow-hidden">
+            <div className="brand-gradient px-6 py-7 text-center text-white">
+              <span className="mx-auto flex h-14 w-14 animate-pop-in items-center justify-center rounded-full bg-white/20 text-2xl">
+                ✓
+              </span>
+              <p className="mt-4 text-xl font-bold tracking-tight">Scan successful!</p>
+              <p className="mt-1 text-sm text-brand-50/85">Code verified</p>
+            </div>
+
+            <div className="p-5 sm:p-7">
+              <div className="panel-teal text-center">
+                <p className="section-label">Campaign</p>
+                <p className="mt-1 text-base font-bold text-brand-700">{session.campaign.name}</p>
+              </div>
+
+              <p className="mt-5 text-sm leading-relaxed text-slate-500">
+                Complete the short survey on our partner&apos;s site, then come back here to claim your
+                reward.
+              </p>
+
+              <a
+                className="btn-cta mt-5"
+                href={session.survey.url}
+                rel="noopener noreferrer nofollow"
+              >
+                Start Survey
+              </a>
+
+              <div className="mt-7 border-t border-slate-100 pt-6">
+                <p className="mb-4 text-center text-sm font-semibold text-ink-900">
+                  Already finished it? Enter your e-mail to receive your coupon.
+                </p>
+                <EmailOnlyForm
+                  submitting={submitting}
+                  error={submitError}
+                  onSubmit={(email) => void submit({}, email)}
+                  buttonLabel="Get My Coupon"
+                />
+              </div>
+            </div>
           </div>
         </div>
       </PublicShell>
@@ -161,7 +180,7 @@ export default function ReadPage() {
   }
 
   return (
-    <PublicShell>
+    <PublicShell compact>
       <SurveyRunner
         survey={session.survey.survey}
         campaignName={session.campaign.name}

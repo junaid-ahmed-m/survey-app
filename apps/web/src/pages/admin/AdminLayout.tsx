@@ -2,6 +2,7 @@ import { ReactNode, useState } from 'react';
 import { NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
 import { FullPageLoader } from '../../components/Spinner';
+import { BrandMark } from '../../components/BrandLogo';
 import { EmptyState } from '../../components/admin/ui';
 import { PERMISSIONS, Permission } from '../../lib/permissions';
 
@@ -26,14 +27,12 @@ export default function AdminLayout() {
   const nav = NAV.filter((item) => can(item.permission));
 
   return (
-    <div className="min-h-dvh bg-slate-50 lg:flex">
+    <div className="min-h-dvh bg-brand-50/40 lg:flex">
       {/* Mobile top bar */}
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 lg:hidden">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-xs font-bold text-white">
-            QR
-          </div>
-          <span className="text-sm font-semibold text-slate-800">Admin</span>
+        <div className="flex items-center gap-2.5">
+          <BrandMark className="h-8" logoClassName="h-4 w-auto" />
+          <span className="text-sm font-semibold text-ink-900">Admin</span>
         </div>
         <button
           type="button"
@@ -58,12 +57,10 @@ export default function AdminLayout() {
           menuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="hidden items-center gap-2 px-5 py-5 lg:flex">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-sm font-bold text-white">
-            QR
-          </div>
+        <div className="hidden items-center gap-2.5 px-5 py-5 lg:flex">
+          <BrandMark className="h-10" logoClassName="h-5 w-auto" />
           <div>
-            <p className="text-sm font-semibold text-slate-800">Scan &amp; Reward</p>
+            <p className="text-sm font-semibold text-ink-900">Scan &amp; Reward</p>
             <p className="text-xs text-slate-400">Admin portal</p>
           </div>
         </div>
@@ -77,7 +74,9 @@ export default function AdminLayout() {
               onClick={() => setMenuOpen(false)}
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
-                  isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50'
+                  isActive
+                    ? 'bg-brand-50 font-semibold text-brand-700'
+                    : 'text-ink-500 hover:bg-brand-50/60 hover:text-brand-700'
                 }`
               }
             >
@@ -88,8 +87,8 @@ export default function AdminLayout() {
         </nav>
 
         <div className="absolute inset-x-0 bottom-0 border-t border-slate-100 p-3">
-          <div className="rounded-xl bg-slate-50 px-3 py-2.5">
-            <p className="truncate text-sm font-medium text-slate-700">{user.name ?? user.email}</p>
+          <div className="rounded-xl bg-brand-50/70 px-3 py-2.5">
+            <p className="truncate text-sm font-semibold text-ink-900">{user.name ?? user.email}</p>
             <p className="truncate text-xs text-slate-400">{user.role}</p>
           </div>
           <button type="button" className="btn-ghost mt-2 w-full justify-start" onClick={logout}>

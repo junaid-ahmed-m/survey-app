@@ -8,7 +8,7 @@
   }
 
   body {
-    @apply bg-slate-50 text-slate-900 antialiased;
+    @apply bg-white text-ink-900 antialiased;
     font-family: Inter, 'Segoe UI', system-ui, sans-serif;
   }
 
@@ -24,21 +24,34 @@
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition
-           focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed
-           disabled:opacity-60;
+    @apply inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2
+           disabled:cursor-not-allowed disabled:opacity-60;
   }
 
+  /* Coral is the brand's primary action colour across the consumer flow and admin. */
   .btn-primary {
+    @apply btn bg-accent-500 text-white shadow-sm shadow-accent-500/25 hover:bg-accent-600 active:bg-accent-700
+           focus-visible:ring-accent-400 disabled:shadow-none;
+  }
+
+  /* Full-width, large call to action used at the bottom of the consumer screens. */
+  .btn-cta {
+    @apply btn w-full rounded-2xl bg-accent-500 px-5 py-4 text-base text-white shadow-lg shadow-accent-500/25
+           hover:bg-accent-600 active:bg-accent-700 focus-visible:ring-accent-400
+           disabled:bg-accent-200 disabled:opacity-100 disabled:shadow-none;
+  }
+
+  .btn-teal {
     @apply btn bg-brand-600 text-white hover:bg-brand-700 active:bg-brand-800;
   }
 
   .btn-secondary {
-    @apply btn border border-slate-200 bg-white text-slate-700 hover:bg-slate-50;
+    @apply btn border border-slate-200 bg-white text-ink-700 hover:border-brand-200 hover:bg-brand-50;
   }
 
   .btn-ghost {
-    @apply btn text-slate-600 hover:bg-slate-100;
+    @apply btn text-ink-500 hover:bg-brand-50 hover:text-brand-700;
   }
 
   .btn-danger {
@@ -46,16 +59,16 @@
   }
 
   .card {
-    @apply rounded-2xl border border-slate-200 bg-white shadow-sm;
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-sm;
   }
 
   .input {
-    @apply w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900
+    @apply w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-ink-900
            placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100;
   }
 
   .label {
-    @apply mb-1.5 block text-sm font-medium text-slate-700;
+    @apply mb-1.5 block text-sm font-medium text-ink-700;
   }
 
   .badge {
@@ -64,5 +77,34 @@
 
   .table-wrap {
     @apply -mx-4 overflow-x-auto sm:mx-0;
+  }
+
+  /* Small all-caps section heading, e.g. "HOW IT WORKS". */
+  .section-label {
+    @apply text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400;
+  }
+
+  /* Soft teal information panel. */
+  .panel-teal {
+    @apply rounded-2xl border border-brand-100 bg-brand-50/70 px-4 py-4;
+  }
+
+  /* Teal gradient used by the consumer hero and the reward ticket. */
+  .brand-gradient {
+    @apply bg-gradient-to-br from-brand-500 via-brand-600 to-brand-800;
+  }
+
+  /* Selectable answer surface. */
+  .choice {
+    @apply rounded-2xl border-2 bg-white text-left text-sm font-medium transition
+           focus-visible:ring-2 focus-visible:ring-brand-300 focus-visible:ring-offset-2;
+  }
+
+  .choice-idle {
+    @apply border-slate-200 text-ink-700 hover:border-brand-300 hover:bg-brand-50/50;
+  }
+
+  .choice-active {
+    @apply border-brand-500 bg-brand-50 text-brand-800;
   }
 }
